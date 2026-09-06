@@ -561,7 +561,17 @@ readiness evaluator, the build, or the bundle.
   `unchanged`, `changed`, or `unverifiable`. Only a source that was actually
   fetched can be called changed; a fetch that fails after its retry budget is
   `unverifiable`, carries the last successful verification date, and marks no
-  rule stale. When requested, the watcher also emits a complete proposed
+  rule stale. For a source whose hash moved, the watcher also holds each
+  dependent rule's recorded excerpt against the text it just fetched and
+  records `excerpt_survives`, `excerpt_lost`, or `not_checkable` per rule,
+  using the same normalization as the AI layer's citation verifier. That
+  ordering signal stales nothing extra and clears nothing: a rule whose
+  excerpt survived is still on hold until a person re-verifies it, because
+  surrounding text can change what the same sentence means. A source that
+  could not be read reports `not_checkable` for every rule that cites it and
+  may report nothing else — both the loader and the browser bundle check
+  refuse a verdict about words inside a document that was never opened. When
+  requested, the watcher also emits a complete proposed
   source-state receipt with observed digests, the run/commit binding, and
   exact affected and unaffected rule/Golden IDs. Every Golden fixture declares
   sorted `rule_dependency_ids`, so expected-empty negative and ambiguous cases

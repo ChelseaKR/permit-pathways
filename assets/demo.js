@@ -1418,9 +1418,42 @@ const SOURCE_OBSERVATION_KEYS = [
 // no document is published at that address. Neither stales a rule, but
 // only one of them means the printed citation link resolves to nothing.
 const UNVERIFIABLE_KINDS = ["transport", "not_found"];
-const SOURCE_OBSERVATION_ALLOWED_KEYS = [
-  ...SOURCE_OBSERVATION_KEYS, "unverifiable_kind",
+// Per dependent rule, whether the text that rule quotes still occurs in the
+// document that came back. An unchanged source produced no new document, so
+// it may not carry the field at all. An unverifiable one may, but only to
+// say "not_checkable": nothing was read, so a survival or a loss there would
+// report a check that never ran. Refused exactly as the Python loader
+// refuses it, so the two runtimes cannot disagree about what a receipt says.
+const EXCERPT_SURVIVAL_STATUSES = [
+  "excerpt_survives", "excerpt_lost", "not_checkable",
 ];
+const EXCERPT_SURVIVAL_KEYS = ["rule_id", "status"];
+const EXCERPT_SURVIVAL_ALLOWED_KEYS = [...EXCERPT_SURVIVAL_KEYS, "reason"];
+const SOURCE_OBSERVATION_ALLOWED_KEYS = [
+  ...SOURCE_OBSERVATION_KEYS, "unverifiable_kind", "excerpt_survival",
+];
+
+function excerptSurvivalIsValid(entries, status) {
+  if (!Array.isArray(entries) || !entries.length) return false;
+  const ruleIds = [];
+  for (const entry of entries) {
+    if (!hasExactKeys(entry, EXCERPT_SURVIVAL_ALLOWED_KEYS, EXCERPT_SURVIVAL_KEYS)
+        || !nonBlank(entry.rule_id)
+        || !EXCERPT_SURVIVAL_STATUSES.includes(entry.status)) return false;
+    const hasReason = Object.prototype.hasOwnProperty.call(entry, "reason");
+    // Only `not_checkable` carries a reason, and it must carry one: a
+    // check that could not run has to say why.
+    if (entry.status === "not_checkable") {
+      if (!nonBlank(entry.reason)) return false;
+    } else if (hasReason) {
+      return false;
+    }
+    // A source that could not be read cannot have produced a verdict.
+    if (status === "unverifiable" && entry.status !== "not_checkable") return false;
+    ruleIds.push(entry.rule_id);
+  }
+  return ruleIds.every((ruleId, index) => !index || ruleIds[index - 1] < ruleId);
+}
 const SOURCE_RECEIPT_KEYS = ["commit_sha", "method", "run_url", "status"];
 
 function validSha256(value) {
@@ -1459,6 +1492,15 @@ function sourceStateObservationIsValid(observation, source) {
       || observation.recorded_sha256 !== source.sha256
       || observation.last_verified_on !== source.fetched_on
       || !validSha256(observation.recorded_sha256)) return false;
+  const claimsSurvival = Object.prototype.hasOwnProperty.call(
+    observation, "excerpt_survival",
+  );
+  // An unchanged source produced no document any of this could be about.
+  if (claimsSurvival
+      && (!["changed", "unverifiable"].includes(observation.status)
+        || !excerptSurvivalIsValid(
+          observation.excerpt_survival, observation.status,
+        ))) return false;
   if (observation.status === "unverifiable") {
     // A failure with no kind cannot be rendered honestly, so refuse it
     // rather than guess which kind it was.

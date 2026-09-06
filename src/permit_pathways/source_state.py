@@ -18,6 +18,11 @@ from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
 
+from .excerpt_survival import (
+    EXCERPT_SURVIVAL_STATUSES,
+    ExcerptSurvivalStatus,
+    RuleExcerptSurvival,
+)
 from .harness.runner import load_golden
 from .harness.watch import (
     UNVERIFIABLE_KINDS,
@@ -62,6 +67,15 @@ _OBSERVATION_KEYS = {
 # keeps its fingerprint. A fetched observation carrying the key is rejected
 # rather than ignored.
 _UNVERIFIABLE_KIND_KEY = "unverifiable_kind"
+# Present only on a `changed` observation, and only when the run was given
+# rules to check. Same discipline as `unverifiable_kind` above: a receipt
+# written before this field existed stays byte-identical and keeps its
+# fingerprint, and an observation that has no business carrying it — an
+# unchanged source, or one nobody could read — is rejected rather than
+# ignored. Claiming an excerpt survived in a source this run never read is
+# precisely the confusion this project exists to refuse.
+_EXCERPT_SURVIVAL_KEY = "excerpt_survival"
+_EXCERPT_SURVIVAL_ENTRY_KEYS = {"rule_id", "status"}
 _RECEIPT_KEYS = {"commit_sha", "method", "run_url", "status"}
 
 
@@ -78,6 +92,12 @@ class SourceObservation:
     # answered that no document is published at that address. Neither is
     # evidence that the law changed, and neither stales a dependent rule.
     unverifiable_kind: UnverifiableKind | None = None
+    # Set only when ``status`` is ``changed``: per dependent rule, whether the
+    # text that rule quotes still occurs in the document that came back. It
+    # stales nothing and clears nothing — a rule whose excerpt survived is
+    # still on hold until a person re-verifies it. It only says where to look
+    # first.
+    excerpt_survival: tuple[RuleExcerptSurvival, ...] | None = None
 
     @property
     def is_not_found(self) -> bool:
@@ -94,6 +114,10 @@ class SourceObservation:
         }
         if self.unverifiable_kind is not None:
             payload[_UNVERIFIABLE_KIND_KEY] = self.unverifiable_kind
+        if self.excerpt_survival is not None:
+            payload[_EXCERPT_SURVIVAL_KEY] = [
+                item.to_dict() for item in self.excerpt_survival
+            ]
         return payload
 
 
@@ -282,6 +306,7 @@ def _observation_from_watch(
         raise ValueError(f"{source_id}: watched source lacks recorded evidence")
     failure = watch.unverifiable.get(source_id)
     if failure is not None:
+        unread = watch.excerpt_survival.get(source_id)
         return SourceObservation(
             source_id=source_id,
             status="unverifiable",
@@ -290,6 +315,9 @@ def _observation_from_watch(
             last_verified_on=source.fetched_on,
             reason=failure.reason,
             unverifiable_kind=failure.kind,
+            excerpt_survival=tuple(sorted(unread, key=lambda item: item.rule_id))
+            if unread
+            else None,
         )
     observed = watch.observed_digests.get(source_id)
     if observed is None:
@@ -299,6 +327,7 @@ def _observation_from_watch(
     status: SourceWatchStatus = "changed" if source_id in watch.changed else "unchanged"
     if (status == "unchanged") != (observed == source.sha256):
         raise ValueError(f"{source_id}: status contradicts observed digest")
+    survival = watch.excerpt_survival.get(source_id) if status == "changed" else None
     return SourceObservation(
         source_id=source_id,
         status=status,
@@ -306,6 +335,9 @@ def _observation_from_watch(
         observed_sha256=observed,
         last_verified_on=source.fetched_on,
         reason=None,
+        excerpt_survival=tuple(sorted(survival, key=lambda item: item.rule_id))
+        if survival
+        else None,
     )
 
 
@@ -454,12 +486,88 @@ def _observation_kind(source_id: str, raw: dict[str, Any], status: Any) -> Any:
     return kind
 
 
+def _survival_entry(source_id: str, entry: Any) -> RuleExcerptSurvival:
+    """One `{rule_id, status, reason?}` row, validated strictly."""
+
+    if not isinstance(entry, dict) or set(entry) < _EXCERPT_SURVIVAL_ENTRY_KEYS:
+        raise ValueError(f"{source_id}.excerpt_survival: invalid entry")
+    if not set(entry) <= (_EXCERPT_SURVIVAL_ENTRY_KEYS | {"reason"}):
+        raise ValueError(f"{source_id}.excerpt_survival: invalid entry")
+    rule_id = entry.get("rule_id")
+    if not isinstance(rule_id, str) or not rule_id.strip():
+        raise ValueError(f"{source_id}.excerpt_survival: invalid rule_id")
+    status = entry.get("status")
+    if status not in EXCERPT_SURVIVAL_STATUSES:
+        raise ValueError(f"{source_id}.excerpt_survival: invalid status")
+    reason = entry.get("reason")
+    if status == "not_checkable":
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(
+                f"{source_id}.excerpt_survival: not_checkable needs a reason"
+            )
+    elif reason is not None:
+        # A survived or lost result is the answer; a reason attached to one
+        # would explain something that did not happen.
+        raise ValueError(
+            f"{source_id}.excerpt_survival: only not_checkable carries a reason"
+        )
+    return RuleExcerptSurvival(
+        rule_id=rule_id,
+        status=cast("ExcerptSurvivalStatus", status),
+        reason=reason,
+    )
+
+
+def _observation_survival(
+    source_id: str,
+    raw: dict[str, Any],
+    status: Any,
+) -> tuple[RuleExcerptSurvival, ...] | None:
+    """Parse `excerpt_survival`, refusing it where it cannot have been earned.
+
+    The field answers "does the text this rule quotes still occur in the
+    document that came back". An `unchanged` source produced no new document
+    at all, so it may not carry the field. An `unverifiable` one may — but
+    only to say `not_checkable`, because nothing was read: a receipt claiming
+    `excerpt_survives` or `excerpt_lost` there asserts a check that never ran,
+    which is the failure this receipt format exists to make impossible.
+    Rejected, never ignored.
+    """
+
+    if _EXCERPT_SURVIVAL_KEY not in raw:
+        return None
+    if status not in ("changed", "unverifiable"):
+        raise ValueError(
+            f"{source_id}: only a changed or unverifiable observation may carry "
+            "excerpt survival"
+        )
+    entries = raw[_EXCERPT_SURVIVAL_KEY]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError(f"{source_id}.excerpt_survival: expected a non-empty list")
+    parsed = [_survival_entry(source_id, entry) for entry in entries]
+    if status == "unverifiable" and any(
+        item.status != "not_checkable" for item in parsed
+    ):
+        # The load-bearing refusal. A source this run could not read cannot
+        # have yielded a verdict about anything in it, so `excerpt_survives`
+        # or `excerpt_lost` here is a claim that a check ran when it did not.
+        raise ValueError(
+            f"{source_id}: an unverifiable source can only report not_checkable"
+        )
+    rule_ids = [item.rule_id for item in parsed]
+    if len(set(rule_ids)) != len(rule_ids):
+        raise ValueError(f"{source_id}.excerpt_survival: duplicate rule")
+    if rule_ids != sorted(rule_ids):
+        raise ValueError(f"{source_id}.excerpt_survival: expected sorted rules")
+    return tuple(parsed)
+
+
 def _load_observation(
     raw: Any,
     watched: dict[str, SourceRecord],
 ) -> SourceObservation:
     if not isinstance(raw, dict) or not set(raw) <= (
-        _OBSERVATION_KEYS | {_UNVERIFIABLE_KIND_KEY}
+        _OBSERVATION_KEYS | {_UNVERIFIABLE_KIND_KEY, _EXCERPT_SURVIVAL_KEY}
     ):
         raise ValueError("observations: invalid fields")
     if not set(raw) >= _OBSERVATION_KEYS:
@@ -480,6 +588,7 @@ def _load_observation(
         raise ValueError(f"{source_id}: recorded evidence drifted")
     _validate_observation_evidence(source_id, status, recorded, observed, reason)
     kind = _observation_kind(source_id, raw, status)
+    survival = _observation_survival(source_id, raw, status)
     return SourceObservation(
         source_id=source_id,
         status=cast(SourceWatchStatus, status),
@@ -488,6 +597,7 @@ def _load_observation(
         last_verified_on=source.fetched_on,
         reason=reason,
         unverifiable_kind=cast("UnverifiableKind | None", kind),
+        excerpt_survival=survival,
     )
 
 

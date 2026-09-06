@@ -338,6 +338,81 @@ check(
   normalize(undescribed) === null,
   "an unverifiable observation with no kind was accepted",
 );
+// --- excerpt survival -----------------------------------------------------
+// Survival answers "does the text this rule quotes still occur in the
+// document that came back". Only a changed observation has such a document.
+// The browser bundle refuses the claim anywhere else, exactly as the Python
+// loader does, so the two runtimes cannot disagree about what a receipt says.
+const survivingChange = changedReceipt("ca-gov-66321");
+const changedObservation = survivingChange.observations.find(
+  item => item.source_id === "ca-gov-66321",
+);
+changedObservation.excerpt_survival = [
+  {rule_id: "a-rule", status: "excerpt_lost"},
+  {rule_id: "b-rule", status: "excerpt_survives"},
+  {rule_id: "c-rule", status: "not_checkable", reason: "scanned image"},
+];
+check(
+  normalize(survivingChange) !== null,
+  "valid excerpt survival on a changed source rejected",
+);
+
+// A source nobody could read may say so, per rule, and nothing more.
+const notCheckableOnUnverifiable = structuredClone(unverifiable);
+notCheckableOnUnverifiable.observations.find(
+  item => item.source_id === "ca-gov-66317",
+).excerpt_survival = [
+  {rule_id: "a-rule", status: "not_checkable", reason: "HTTP 403 Forbidden"},
+];
+check(
+  normalize(notCheckableOnUnverifiable) !== null,
+  "not_checkable on an unverifiable source rejected",
+);
+
+for (const verdict of ["excerpt_survives", "excerpt_lost"]) {
+  const survivalOnUnverifiable = structuredClone(unverifiable);
+  survivalOnUnverifiable.observations.find(
+    item => item.source_id === "ca-gov-66317",
+  ).excerpt_survival = [{rule_id: "a-rule", status: verdict}];
+  check(
+    normalize(survivalOnUnverifiable) === null,
+    `${verdict} was accepted for a source that was never read`,
+  );
+}
+
+const survivalOnUnchanged = structuredClone(bundle.source_state);
+survivalOnUnchanged.observations.find(
+  item => item.source_id === "ca-gov-66321",
+).excerpt_survival = [{rule_id: "a-rule", status: "excerpt_survives"}];
+check(
+  normalize(survivalOnUnchanged) === null,
+  "excerpt survival was accepted for an unchanged source",
+);
+
+for (const [label, entries] of [
+  ["an unsorted rule list", [
+    {rule_id: "z-rule", status: "excerpt_survives"},
+    {rule_id: "a-rule", status: "excerpt_lost"},
+  ]],
+  ["an empty list", []],
+  ["an invented status", [{rule_id: "a-rule", status: "invented"}]],
+  ["not_checkable with no reason", [
+    {rule_id: "a-rule", status: "not_checkable"},
+  ]],
+  ["a reason on a decided result", [
+    {rule_id: "a-rule", status: "excerpt_survives", reason: "because"},
+  ]],
+]) {
+  const malformed = changedReceipt("ca-gov-66321");
+  malformed.observations.find(
+    item => item.source_id === "ca-gov-66321",
+  ).excerpt_survival = entries;
+  check(
+    normalize(malformed) === null,
+    `excerpt survival accepted ${label}`,
+  );
+}
+
 SOURCE_STATE = normalizedUnverifiable;
 check(
   journeySourcesAreCurrent(bundle.journeys[0], bundle.readiness),

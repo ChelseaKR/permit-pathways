@@ -46,13 +46,22 @@ import re
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import urlsplit
 
 from ..dates import resolve_today
+from ..excerpt_survival import (
+    RuleExcerptSurvival,
+    survival_for_source,
+    text_from_bytes,
+)
+
+if TYPE_CHECKING:
+    from ..screening import Rule
 
 FETCH_TIMEOUT_SECONDS = 30
 # A scheduled run must tolerate a transient blip without crying "changed".
@@ -165,6 +174,13 @@ class WatchResult:
     # Fetch failures. Deliberately separate from ``changed``: an unreachable
     # source is not a revised source.
     unverifiable: dict[str, UnverifiableSource] = field(default_factory=dict)
+    # Per changed source, whether each dependent rule's quoted excerpt still
+    # occurs in the new text. Populated only for sources in ``changed``: an
+    # unchanged source has nothing to survive, and an unverifiable one was
+    # never read. Empty when the caller supplied no rules to check against.
+    excerpt_survival: dict[str, tuple[RuleExcerptSurvival, ...]] = field(
+        default_factory=dict
+    )
 
     @property
     def checked(self) -> int:
@@ -403,6 +419,27 @@ def fetch_digest(
     and would only make a dead citation look like a flaky network.
     """
 
+    digest, _ = fetch_document(
+        source, attempts=attempts, backoff_seconds=backoff_seconds
+    )
+    return digest
+
+
+def fetch_document(
+    source: SourceRecord,
+    *,
+    attempts: int | None = None,
+    backoff_seconds: float | None = None,
+) -> tuple[str, bytes]:
+    """Fetch a watched source, returning its normalized digest and its bytes.
+
+    :func:`fetch_digest` answers the only question the hash comparison needs.
+    The bytes are kept here as well because a source whose digest moved is
+    about to be asked a second question — whether the text each dependent
+    rule quotes is still in it — and re-downloading the document to ask it
+    would be a second, differently-timed read of a moving target.
+    """
+
     budget = FETCH_ATTEMPTS if attempts is None else attempts
     backoff = FETCH_BACKOFF_SECONDS if backoff_seconds is None else backoff_seconds
     budget = max(1, budget)
@@ -411,7 +448,8 @@ def fetch_digest(
     attempt = 0
     for attempt in range(1, budget + 1):
         try:
-            return normalized_digest(_fetch_once(source), source.normalize)
+            payload = _fetch_once(source)
+            return normalized_digest(payload, source.normalize), payload
         except FetchFailure as error:
             reason, kind = error.reason, error.kind
         except Exception as error:
@@ -425,12 +463,28 @@ def fetch_digest(
     raise FetchFailure(reason, kind=kind, attempts=max(1, attempt))
 
 
+def _document_suffix(source: SourceRecord) -> str:
+    """The media type of a watched source, by file extension.
+
+    The local retained copy names it exactly; the published URL is the
+    fallback. Neither is a Content-Type header, and a wrong guess here only
+    ever produces `not_checkable`, never a survival claim.
+    """
+
+    if source.local_copy:
+        suffix = Path(source.local_copy).suffix
+        if suffix:
+            return suffix
+    return Path(urlsplit(source.url).path).suffix
+
+
 def check_sources(
     sources_path: Path,
     *,
     today: date | None = None,
     attempts: int | None = None,
     backoff_seconds: float | None = None,
+    rules: Sequence[Rule] | None = None,
 ) -> WatchResult:
     """Classify every watched source as unchanged, changed, or unverifiable.
 
@@ -438,6 +492,11 @@ def check_sources(
     ``changed``: the loop records it under ``unverifiable`` and moves on.
     Each unverifiable record also carries its ``kind`` so a withdrawn
     published address is not reported as a flaky network.
+
+    When ``rules`` is supplied, each *changed* source is asked the second
+    question as well: does the text each dependent rule quotes still occur in
+    the document that came back? The answer is recorded per rule and stales
+    nothing on its own — see :mod:`permit_pathways.excerpt_survival`.
     """
 
     sources = load_sources(sources_path, today=resolve_today(today))
@@ -447,7 +506,7 @@ def check_sources(
         if not source.watch:
             continue
         try:
-            digest = fetch_digest(
+            digest, payload = fetch_document(
                 source,
                 attempts=budget,
                 backoff_seconds=backoff_seconds,
@@ -460,10 +519,32 @@ def check_sources(
                 attempts=failure.attempts,
                 kind=failure.kind,
             )
+            if rules is not None:
+                # Say so per rule rather than staying silent. A source nobody
+                # could read yields `not_checkable` for every rule that cites
+                # it — never a survival or a loss, which would report a
+                # reading that did not happen.
+                result.excerpt_survival[source_id] = survival_for_source(
+                    source_id,
+                    rules,
+                    new_text=None,
+                    not_checkable_reason=(
+                        f"the source could not be read this run: {failure.reason}"
+                    ),
+                )
             continue
         result.observed_digests[source_id] = digest
         if digest == source.sha256:
             result.unchanged.append(source_id)
-        else:
-            result.changed.append(source_id)
+            continue
+        result.changed.append(source_id)
+        if rules is None:
+            continue
+        text, reason = text_from_bytes(payload, suffix=_document_suffix(source))
+        result.excerpt_survival[source_id] = survival_for_source(
+            source_id,
+            rules,
+            new_text=text,
+            not_checkable_reason=reason,
+        )
     return result

@@ -7,6 +7,34 @@ published a versioned release.
 
 ### Added
 
+- The source watch now reports, per rule, whether the text that rule quotes
+  still occurs in a source whose content hash moved. A changed hash stales
+  every dependent rule, which is correct and deliberately coarse: a footer
+  edit on the HCD Handbook stales seventeen rules exactly as a rewritten
+  height section would. The receipt and the harness now also answer the
+  question a maintainer asks next — which of those rules lost the words it
+  quotes — as `excerpt_survives`, `excerpt_lost`, or `not_checkable`.
+  - **It un-stales nothing.** A rule whose excerpt survived is still on hold
+    until a person re-verifies it: surrounding text can change what the same
+    sentence means, and no string test sees that. Survival orders the
+    worklist; it never shortens it. No exit code moves.
+  - Matching is `ai.corpus.normalize_for_match`, the same normalization the
+    AI layer's citation verifier uses, so "occurs verbatim" means one thing
+    in this project rather than two. The document is read from the bytes the
+    watch already fetched, so the check is not a second, differently-timed
+    read of a moving target.
+  - A source that could not be read reports `not_checkable` for every rule
+    that cites it, carrying the reason, and may report nothing else. Both the
+    Python loader and the browser bundle check refuse a receipt that claims
+    `excerpt_survives` or `excerpt_lost` for an unverifiable source, and
+    refuse the field entirely on an unchanged one: a verdict about words
+    inside a document nobody opened is a claim that a check ran when it did
+    not.
+  - The field is additive and appears only where it was earned, so every
+    receipt written before it existed stays byte-identical and keeps its
+    fingerprint. The committed receipt is unchanged, and no digest it is
+    pinned by moves.
+
 - `beta_gate_cli recompute` re-derives the digests that ordinary maintenance
   moves, so re-pinning them stops being a hand-edit of a tamper-evidence
   chain. Two routine acts change bytes this repository pins by hash —

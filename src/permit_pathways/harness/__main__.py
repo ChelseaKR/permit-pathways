@@ -44,7 +44,7 @@ from ..dates import resolve_today
 from .runner import verify_rules
 
 if TYPE_CHECKING:
-    from .watch import UnverifiableSource
+    from .watch import UnverifiableSource, WatchResult
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -180,6 +180,28 @@ def _adopted_withdrawn_citation_report(args: argparse.Namespace) -> str | None:
     return "\n".join(lines)
 
 
+def _print_excerpt_survival(watch: WatchResult) -> None:
+    """Per changed source, whether each dependent rule's quoted text survived.
+
+    Printed under the watch summary and above the rule report, because it is
+    the first question a maintainer asks after "which sources moved". It
+    reorders that work; it never removes any of it — every dependent rule is
+    stale either way until a person re-verifies it.
+    """
+
+    if not watch.excerpt_survival:
+        return
+    from ..excerpt_survival import summarize
+
+    print(
+        "\nquoted text after the change (stales nothing on its own):\n"
+        + "\n".join(
+            summarize(source_id, watch.excerpt_survival[source_id])
+            for source_id in sorted(watch.excerpt_survival)
+        )
+    )
+
+
 def _print_adopted_withdrawn_citations(args: argparse.Namespace) -> None:
     report = _adopted_withdrawn_citation_report(args)
     if report is not None:
@@ -238,9 +260,18 @@ def main(argv: list[str] | None = None, *, today: date | None = None) -> int:
     unverifiable: dict[str, UnverifiableSource] = {}
     watch = None
     if args.fetch:
+        from ..screening import load_rules
         from .watch import check_sources, load_sources
 
-        watch = check_sources(args.sources, today=as_of)
+        # The rules are handed to the watch so a source whose bytes moved can
+        # be asked, in the same read, whether the text each dependent rule
+        # quotes is still in it. It stales nothing extra: excerpt survival
+        # orders the re-verification worklist, it does not shorten it.
+        watch = check_sources(
+            args.sources,
+            today=as_of,
+            rules=load_rules(args.rules, today=as_of),
+        )
         labels = {
             source_id: source.label
             for source_id, source in load_sources(args.sources, today=as_of).items()
@@ -255,6 +286,7 @@ def main(argv: list[str] | None = None, *, today: date | None = None) -> int:
         changed.extend(watch.changed)
         source_changed = bool(watch.changed)
         unverifiable = dict(watch.unverifiable)
+        _print_excerpt_survival(watch)
 
     report = verify_rules(
         args.rules,
