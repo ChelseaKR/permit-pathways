@@ -39,14 +39,13 @@ function sourceStateFixture(status, sourceId) {
   if (status === "changed") {
     observation.observed_sha256 = "0".repeat(64);
     observation.reason = null;
-    state.changed_source_ids = [sourceId];
-    state.unverifiable_source_ids = [];
+    // A fetched observation may not carry a kind, and this source may have
+    // arrived already withdrawn from the committed receipt.
+    delete observation.unverifiable_kind;
   } else if (status === "unverifiable") {
     observation.observed_sha256 = null;
     observation.reason = "HTTP 403 Forbidden";
     observation.unverifiable_kind = "transport";
-    state.changed_source_ids = [];
-    state.unverifiable_source_ids = [sourceId];
   } else if (status === "not_found") {
     // The server answered about this address: the document is gone, and a
     // reader who follows the printed citation gets nothing.
@@ -54,11 +53,20 @@ function sourceStateFixture(status, sourceId) {
     observation.observed_sha256 = null;
     observation.reason = "HTTP 404 Not Found";
     observation.unverifiable_kind = "not_found";
-    state.changed_source_ids = [];
-    state.unverifiable_source_ids = [sourceId];
   } else {
     throw new Error(`unsupported source fixture status: ${status}`);
   }
+  // Derive both id lists from the observations rather than assuming the
+  // committed receipt carries none of its own. It carries one withdrawn
+  // address (ADR 0005), and a receipt whose lists disagree with its
+  // observations is rejected by the browser validator — correctly, but that
+  // would leave every fixture below stuck on "Loading…" for the wrong reason.
+  const byStatus = wanted => state.observations
+    .filter(item => item.status === wanted)
+    .map(item => item.source_id)
+    .sort();
+  state.changed_source_ids = byStatus("changed");
+  state.unverifiable_source_ids = byStatus("unverifiable");
   const changed = new Set(state.changed_source_ids);
   const affectedRules = data.rules.filter(rule =>
     rule.source_dependencies.some(id => changed.has(id))
@@ -991,27 +999,35 @@ test("reviewed source-state receipt is visible and separate from rehearsal", asy
 }) => {
   await page.goto("/evidence.html");
 
+  // The adopted receipt (2026-08-31 watch run) carries one withdrawn address:
+  // 18 of the 19 watched sources were re-fetched unchanged, and the Davis
+  // handout answered 404. Per ADR 0005 that is reported and stales nothing.
   await expect(page.locator("#sourceSnapshotSummary")).toHaveText(
-    "Checked August 3, 2026: 19 unchanged; 0 changed; 0 could not be "
-      + "re-fetched (0 because the published address answered that no "
+    "Checked August 31, 2026: 18 unchanged; 0 changed; 1 could not be "
+      + "re-fetched (1 because the published address answered that no "
       + "document is there). This repository-adopted receipt is the "
       + "source-state overlay used by the applicant guide.",
   );
   await expect(page.locator("#sourceSnapshotRun")).toHaveAttribute(
     "href",
-    "https://github.com/ChelseaKR/permit-pathways/actions/runs/30835371749",
+    "https://github.com/ChelseaKR/permit-bearings/actions/runs/33407059344",
   );
   await expect(page.locator("#sourceImpactQueue")).toContainText(
     "No source-triggered review queue is open.",
   );
+  // A withdrawn address is not a changed source, so the queue stays closed and
+  // the page says separately that a printed link no longer resolves.
+  await expect(page.locator("#sourceImpactQueue")).toContainText(
+    "Published link not found.",
+  );
   await expect(
     page.locator("#sourceTable .badge", { hasText: "unchanged in snapshot" }),
-  ).toHaveCount(19);
+  ).toHaveCount(18);
 
   await page.locator("#simBtn").click();
   await expect(page.locator("#simNote")).toBeVisible();
   await expect(page.locator("#sourceSnapshotSummary")).toContainText(
-    "19 unchanged; 0 changed",
+    "18 unchanged; 0 changed",
   );
   await expect(page.locator("#sourceImpactQueue")).toContainText(
     "No source-triggered review queue is open.",
@@ -1025,8 +1041,10 @@ test("changed source receipt opens the exact visible review queue", async ({
   await serveSourceStateFixture(page, "changed", "ca-gov-66317");
   await page.goto("/evidence.html");
 
+  // 17 unchanged, § 66317 changed, and the committed receipt's own withdrawn
+  // Davis address still counted separately.
   await expect(page.locator("#sourceSnapshotSummary")).toContainText(
-    "18 unchanged; 1 changed; 0 could not be re-fetched",
+    "17 unchanged; 1 changed; 1 could not be re-fetched",
   );
   await expect(page.locator("#sourceImpactQueue")).toContainText(
     "Review queue open.",
@@ -1051,8 +1069,14 @@ test("unverifiable source receipt warns without staling dependents", async ({
   await serveSourceStateFixture(page, "unverifiable", "ca-gov-66317");
   await page.goto("/evidence.html");
 
+  // Two unverifiable sources of different kinds: § 66317 got no answer
+  // (transport), and the committed receipt's Davis address answered 404.
+  // Only the second is a withdrawn link, and the counts keep them separate.
   await expect(page.locator("#sourceSnapshotSummary")).toContainText(
-    "18 unchanged; 0 changed; 1 could not be re-fetched",
+    "17 unchanged; 0 changed; 2 could not be re-fetched",
+  );
+  await expect(page.locator("#sourceSnapshotSummary")).toContainText(
+    "(1 because the published address answered that no document is there)",
   );
   await expect(page.locator("#sourceImpactQueue")).toContainText(
     "No source-triggered review queue is open.",
@@ -1064,9 +1088,14 @@ test("unverifiable source receipt warns without staling dependents", async ({
     hasText: "Gov. Code § 66317",
   });
   await expect(sourceRow).toContainText("could not re-fetch");
-  await expect(page.locator("#sourceImpactQueue")).not.toContainText(
-    "Published link not found.",
-  );
+  // ADR 0005: a refusal to answer is not an answer about the document. The
+  // not-found finding must name only the address that answered 404, never the
+  // source that merely failed to download.
+  const notFound = page.locator("#sourceImpactQueue p", {
+    hasText: "Published link not found.",
+  });
+  await expect(notFound).toContainText("davis-adu-handout-2026");
+  await expect(notFound).not.toContainText("66317");
   const routeRow = page.getByRole("row", {
     name: /^ADU ministerial review and application timelines statewide/,
   });
