@@ -136,7 +136,7 @@ def _write_json(tmp_path: Path, name: str, payload: object) -> Path:
     return path
 
 
-def test_current_unchanged_receipt_creates_a_clear_worklist():
+def test_current_adopted_receipt_creates_a_clear_worklist():
     snapshot = load_source_state_snapshot(
         CURRENT,
         SOURCES,
@@ -155,7 +155,10 @@ def test_current_unchanged_receipt_creates_a_clear_worklist():
     assert worklist.status == "clear"
     assert worklist.changed_sources == ()
     assert worklist.items == ()
-    assert worklist.unverifiable_source_ids == ()
+    # The adopted receipt carries one withdrawn address (ADR 0005). It is
+    # reported, and it creates no work: an unverifiable source is not evidence
+    # that the law moved, so nothing here may be re-verified on its account.
+    assert worklist.unverifiable_source_ids == ("davis-adu-handout-2026",)
     assert decision_template(worklist).entries == ()
 
 
