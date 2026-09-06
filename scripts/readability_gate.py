@@ -23,7 +23,7 @@ import argparse
 import json
 import re
 import sys
-from datetime import date
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -113,7 +113,7 @@ def build_baseline_payload(
 ) -> dict[str, object]:
     return {
         "schema_version": BASELINE_SCHEMA_VERSION,
-        "generated_on": date.today().isoformat(),
+        "generated_on": datetime.now(UTC).date().isoformat(),
         "note": (
             "Flesch Reading Ease (fre) and Flesch-Kincaid grade (fk) per rule "
             "over English explanation copy. Update only deliberately, with "

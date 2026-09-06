@@ -170,3 +170,30 @@ def test_missing_source_state_does_not_break_the_server(
 
     monkeypatch.setattr(demo_app, "SOURCE_STATE_PATH", tmp_path / "absent.json")
     assert demo_app.committed_changed_source_ids() == ()
+
+
+def test_no_module_resolves_an_omitted_date_against_the_local_clock() -> None:
+    """One calendar, three runtimes: UTC, never the host machine's timezone.
+
+    ``assets/demo.js`` compares every dated source field against ``Date.UTC``
+    and ``permit_pathways.dates`` exists so the Python runtimes agree with it.
+    Two validators had kept ``date.today()``, which resolves against the host
+    timezone: a record stamped with the UTC date failed
+    ``cannot be in the future`` on a laptop west of UTC while the identical
+    bytes passed in CI, and a genuinely future-dated record was accepted east
+    of it. Neither failure is about the data, so neither is allowed back.
+    """
+
+    offenders: list[str] = []
+    roots = (REPOSITORY_ROOT / "src", REPOSITORY_ROOT / "scripts")
+    for root in roots:
+        for path in sorted(root.rglob("*.py")):
+            if "__pycache__" in path.parts:
+                continue
+            if "date.today(" in path.read_text(encoding="utf-8"):
+                offenders.append(str(path.relative_to(REPOSITORY_ROOT)))
+
+    assert offenders == [], (
+        "resolve an omitted calendar date with permit_pathways.dates."
+        "resolve_today (UTC), not date.today() (host timezone): " + ", ".join(offenders)
+    )
