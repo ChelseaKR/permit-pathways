@@ -7,6 +7,25 @@ published a versioned release.
 
 ### Fixed
 
+- The two source watchers stopped announcing a repository that no longer
+  exists. `scripts/pull_hau_letters.py` and
+  `src/permit_pathways/harness/watch.py` sent
+  `permit-pathways-hau-letters-watch/0.1` and
+  `permit-pathways-currency-watch/0.1` as their outbound `User-Agent`, so the
+  HCD and legislative servers this project polls have been logging a project
+  name that only resolves through GitHub's rename redirect — and that redirect
+  survives only while nobody else claims `ChelseaKR/permit-pathways`. Both now
+  name `permit-bearings`. `CITATION.cff`'s `repository-code` and
+  `[project.urls]` did the same to anyone citing or linking the work, and now
+  point at the current URL directly.
+  - This is the externally visible slice of #111 only. The distribution name,
+    the `src/permit_pathways` import package and the deployed Lambda's build
+    are deliberately untouched: moving those has to be sequenced with a
+    rebuild and apply of `deploy/ai-service/`, which is not a repository-only
+    change. #111 stays open for that.
+  - A contract test asserts both user agents and both citation surfaces name
+    the current repository, so the next straggler fails rather than shipping.
+
 - Two date validators compared against the host machine's local calendar
   instead of UTC, so the same bytes passed or failed depending on where and
   when they were checked. `jurisdictions._required_recorded_date` (the

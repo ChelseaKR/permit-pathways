@@ -758,3 +758,34 @@ def test_rule_aggregate_and_manifest_discover_every_rule_file(tmp_path):
         "data/rules/beta.json",
     }
     assert rule_manifest(tmp_path)["files"] == ["alpha.json", "beta.json"]
+
+
+def test_outbound_requests_and_citation_metadata_name_this_repository():
+    """What third-party servers log, and what a citation resolves to.
+
+    The repository was renamed `permit-pathways` -> `permit-bearings`. The two
+    watchers announce themselves to servers this project polls, and
+    `CITATION.cff` tells anyone citing the work where it lives; all three named
+    a repository that only resolves through GitHub's rename redirect, which
+    survives only while nobody else claims the old name. The Python
+    distribution and the import package are deliberately still
+    `permit_pathways` — moving those is coupled to rebuilding the deployed AI
+    service (#111) — so this asserts the outward-facing names only.
+    """
+
+    from scripts.pull_hau_letters import USER_AGENT as HAU_LETTERS_USER_AGENT
+
+    from permit_pathways.harness.watch import USER_AGENT as CURRENCY_USER_AGENT
+
+    for agent in (HAU_LETTERS_USER_AGENT, CURRENCY_USER_AGENT):
+        assert agent.startswith("permit-bearings-")
+        assert "permit-pathways" not in agent
+
+    citation = (ROOT / "CITATION.cff").read_text(encoding="utf-8")
+    assert 'repository-code: "https://github.com/ChelseaKR/permit-bearings"' in citation
+    assert "permit-pathways" not in citation
+
+    project_urls = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    project_urls = project_urls.split("[project.urls]", 1)[1].split("\n[", 1)[0]
+    assert "permit-pathways" not in project_urls
+    assert "ChelseaKR/permit-bearings" in project_urls
