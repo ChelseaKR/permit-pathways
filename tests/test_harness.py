@@ -150,12 +150,12 @@ def _signal_line(output: str) -> str:
     return lines[0]
 
 
-def _signals(output: str) -> dict[str, int]:
+def _signals(output: str) -> dict[str, str]:
     fields = _signal_line(output).removeprefix("currency signals: ").split()
     parsed = {}
     for field in fields:
         name, _, value = field.partition("=")
-        parsed[name] = int(value)
+        parsed[name] = value
     return parsed
 
 
@@ -171,14 +171,40 @@ def test_harness_prints_one_machine_readable_signal_line(capsys):
         "golden_regressions",
         "unverifiable_sources",
     }
-    # The committed state is clean, and the line is printed anyway. A signal
-    # that only appears on failure cannot be used to detect recovery.
+    # The line is printed on a clean run too: a signal that only appears on
+    # failure cannot be used to detect recovery.
+    #
+    # No `--fetch`, so nothing was downloaded. The two counts a download is
+    # the only source of say so, rather than reporting `0` — which is the
+    # same string a watch that ran and found everything current prints, and
+    # which would contradict the withdrawn-citation report above it whenever
+    # the committed receipt records one.
     assert signals == {
-        "changed_sources": 0,
-        "stale_rules": 0,
-        "golden_regressions": 0,
-        "unverifiable_sources": 0,
+        "changed_sources": "not_checked",
+        "stale_rules": "0",
+        "golden_regressions": "0",
+        "unverifiable_sources": "not_checked",
     }
+
+
+def test_signal_line_does_not_report_a_fetch_count_without_a_fetch(capsys):
+    """The regression this guards: `0` for a check that never ran.
+
+    `0` is what a completed, clean watch reports. Printing it for a run that
+    downloaded nothing publishes an absence as a measurement, and a reader —
+    or the weekly workflow's recovery check — cannot tell the two apart.
+    """
+
+    from permit_pathways.harness.__main__ import main
+
+    main([])
+    signals = _signals(capsys.readouterr().out)
+    assert signals["changed_sources"] != "0"
+    assert signals["unverifiable_sources"] != "0"
+    # The other two are derived from the committed rule and Golden records,
+    # which every run reads, so they stay real numbers.
+    assert signals["stale_rules"].isdigit()
+    assert signals["golden_regressions"].isdigit()
 
 
 def test_signal_line_counts_a_simulated_changed_source(capsys):
@@ -188,10 +214,72 @@ def test_signal_line_counts_a_simulated_changed_source(capsys):
     signals = _signals(capsys.readouterr().out)
     assert exit_code == 1
     # `--assume-changed` stales dependents without claiming a fetch happened,
-    # so the changed-source count stays at what was actually fetched.
-    assert signals["changed_sources"] == 0
-    assert signals["stale_rules"] > 0
-    assert signals["golden_regressions"] == 0
+    # so the changed-source count reports that no fetch was made rather than
+    # borrowing the simulated ID.
+    assert signals["changed_sources"] == "not_checked"
+    assert int(signals["stale_rules"]) > 0
+    assert signals["golden_regressions"] == "0"
+
+
+def test_signal_line_reports_real_counts_when_a_fetch_happened(capsys, monkeypatch):
+    """`not_checked` is about the fetch, not a blanket refusal to count.
+
+    With a watch result in hand both fields are numbers again, including the
+    honest `0` for a source set that came back entirely unchanged.
+    """
+
+    from permit_pathways.harness import watch as watch_module
+    from permit_pathways.harness.__main__ import main
+
+    def _fake_check_sources(path, *, today):
+        return watch_module.WatchResult(
+            unchanged=["ca-gov-66321"],
+            changed=[],
+            unverifiable={},
+        )
+
+    def _fake_load_sources(path, *, today):
+        return {}
+
+    monkeypatch.setattr(watch_module, "check_sources", _fake_check_sources)
+    monkeypatch.setattr(watch_module, "load_sources", _fake_load_sources)
+
+    exit_code = main(["--fetch"])
+    signals = _signals(capsys.readouterr().out)
+    assert exit_code == 0
+    assert signals["changed_sources"] == "0"
+    assert signals["unverifiable_sources"] == "0"
+
+
+def test_signal_line_counts_a_fetched_unverifiable_source(capsys, monkeypatch):
+    from permit_pathways.harness import watch as watch_module
+    from permit_pathways.harness.__main__ import main
+
+    failure = watch_module.UnverifiableSource(
+        source_id="davis-adu-handout-2026",
+        reason="HTTP 404 Not Found",
+        last_verified_on="2026-07-30",
+        attempts=1,
+        kind="not_found",
+    )
+
+    def _fake_check_sources(path, *, today):
+        return watch_module.WatchResult(
+            unchanged=["ca-gov-66321"],
+            changed=[],
+            unverifiable={"davis-adu-handout-2026": failure},
+        )
+
+    monkeypatch.setattr(watch_module, "check_sources", _fake_check_sources)
+    monkeypatch.setattr(watch_module, "load_sources", lambda path, *, today: {})
+
+    exit_code = main(["--fetch"])
+    signals = _signals(capsys.readouterr().out)
+    # A source that could not be verified never escalates as a change.
+    assert exit_code == 2
+    assert signals["changed_sources"] == "0"
+    assert signals["unverifiable_sources"] == "1"
+    assert signals["stale_rules"] == "0"
 
 
 def test_signal_line_is_greppable_with_a_fixed_prefix(capsys):

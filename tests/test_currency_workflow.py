@@ -329,6 +329,30 @@ def test_alert_survives_a_report_with_no_signal_line(alert_script, tmp_path):
 
 
 @requires_bash
+def test_alert_refuses_a_non_numeric_signal_rather_than_reporting_it(
+    alert_script, tmp_path
+):
+    # `not_checked` is what the harness prints for the two counts a fetch is
+    # the only source of, on a run that did no fetching. The alert body says
+    # "N watched source(s) were fetched and their content hash moved", so a
+    # word reaching that sentence would state a fetch result that does not
+    # exist. Fail the step instead; a wrong count is worse than a red run.
+    completed, calls = _execute(
+        alert_script,
+        tmp_path,
+        "automated source/regression checks: REVIEW NEEDED\n\n"
+        "currency signals: changed_sources=not_checked stale_rules=0 "
+        "golden_regressions=0 unverifiable_sources=not_checked\n",
+        {"TITLE": "T", "GH_ISSUE_LIST_STDOUT": ""},
+    )
+    assert completed.returncode != 0
+    assert "non-numeric value" in completed.stderr
+    # Nothing may be filed on a signal line the parser could not read.
+    assert "issue create" not in calls
+    assert "issue comment" not in calls
+
+
+@requires_bash
 def test_close_step_closes_and_comments_when_the_watch_is_green(tmp_path):
     script = _run_script("Close currency alerts that have cleared")
     completed, calls = _execute(
