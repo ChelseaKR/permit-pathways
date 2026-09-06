@@ -79,9 +79,45 @@ rename on macOS or Linux and fails closed elsewhere; the restored evidence
 bytes remain ordinary files in either case.
 
 The manifest and tree hashes are integrity records, not digital signatures.
-For a handoff, record the whole archive's SHA-256 through a trusted channel,
-for example with `shasum -a 256`, and keep that receipt outside the archive.
-Signing and partner acceptance remain separate future controls.
+They show that nothing inside the archive moved; on their own they say nothing
+about who produced it.
+
+## Signing a handoff
+
+`build --sign-key <key>` writes a detached OpenSSH signature to
+`<archive>.sig.json` beside the archive. The signed payload is a short
+canonical JSON statement naming the archive's SHA-256 together with the package
+id, freeze, commit and profile it claims to be, so a signature cannot be moved
+to a different package even if two builds shared a digest. **The archive bytes
+are identical with and without `--sign-key`**, so the determinism gate and any
+recorded SHA-256 are unaffected.
+
+`verify` and `restore` accept `--allowed-signers <file>` (or
+`--use-repository-signers`, which resolves `.github/allowed_signers` in a
+checkout). Supplying one is how a caller asks for authenticity, and asking is
+what makes absence a failure:
+
+| supplied | archive | reported | exit |
+| --- | --- | --- | ---: |
+| no signers file | unsigned | `absent` | 0 |
+| no signers file | signed | `not_checked` | 0 |
+| signers file | signed by a listed principal | `verified` | 0 |
+| signers file | unsigned | `absent` | 3 |
+| signers file | bytes changed, or signed by another key | `invalid` | 4 |
+| signers file | signer not listed | `unknown_signer` | 5 |
+
+Three things this deliberately does not do. It never infers validity from
+silence: an unsigned archive is `absent`, and a signature nobody asked to check
+is `not_checked`, never `verified`. It tells "we do not accept this producer"
+apart from "these bytes are not what was signed", because OpenSSH prints the
+same message for both and the two call for different responses. And when a
+signers file is supplied, the signature is settled **before the archive is
+opened** — a single altered byte moves the digest the signature covers, so it
+is reported as a broken signature rather than as a changed member.
+
+An empty or comment-only signers file accepts nobody. A signature verified here
+attests who produced the package; it is not an endorsement of its contents, and
+partner acceptance remains a separate control.
 
 ## Canonical and fail-closed format
 

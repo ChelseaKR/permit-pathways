@@ -76,7 +76,30 @@ evidence-export-check:
 		PYTHONPATH=src .venv/bin/python -m permit_pathways.evidence_export_cli restore \
 			--archive "$$archive" \
 			--destination "$$restored" >/dev/null; \
-		printf '%s\n' 'evidence export round trip: pass'
+		signed="$$evidence_directory/public-synthetic-evidence-signed.zip"; \
+		ssh-keygen -q -t ed25519 -N '' -C 'evidence-export-check@example.invalid' \
+			-f "$$evidence_directory/key"; \
+		printf 'evidence-export-check@example.invalid %s\n' \
+			"$$(cut -d' ' -f1,2 "$$evidence_directory/key.pub")" \
+			> "$$evidence_directory/allowed_signers"; \
+		PYTHONPATH=src .venv/bin/python -m permit_pathways.evidence_export_cli build \
+			--output "$$signed" \
+			--freeze-id public-synthetic-evidence-freeze-2026-08-09 \
+			--frozen-on 2026-08-09 \
+			--repository-commit-sha "$$repository_commit_sha" \
+			--sign-key "$$evidence_directory/key" >/dev/null; \
+		cmp -s "$$archive" "$$signed" || { \
+			printf '%s\n' 'signing changed the archive bytes' >&2; exit 1; }; \
+		PYTHONPATH=src .venv/bin/python -m permit_pathways.evidence_export_cli verify \
+			--archive "$$signed" \
+			--allowed-signers "$$evidence_directory/allowed_signers" >/dev/null; \
+		if PYTHONPATH=src .venv/bin/python -m permit_pathways.evidence_export_cli verify \
+			--archive "$$archive" \
+			--allowed-signers "$$evidence_directory/allowed_signers" >/dev/null 2>&1; then \
+			printf '%s\n' 'an unsigned archive passed an authenticity check' >&2; \
+			exit 1; \
+		fi; \
+		printf '%s\n' 'evidence export round trip: pass (unsigned and signed)'
 
 serve-ai:
 	PYTHONPATH=src .venv/bin/python -m permit_pathways.ai
