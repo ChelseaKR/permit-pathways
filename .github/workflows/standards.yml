@@ -28,10 +28,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ChelseaKR/portfolio-standards
-          # Pinned to the head of portfolio-standards PR #97 (main + the
-          # applicability key rename for this repo's GitHub rename). Re-pin to a
-          # released tag once that PR merges; see issue #74.
-          ref: 9ef3ba10d7c2b3abffc9d16d86dc204f6c95c6db
+          # portfolio-standards PR #97 merged on 2026-09-06 as 553909b, which
+          # is this pin: the squash commit on that repository's default branch
+          # carrying the applicability key rename for this repo's GitHub
+          # rename. The previous pin, 9ef3ba1, was an intermediate commit on
+          # PR #97's head branch; once that branch is deleted the commit
+          # becomes unreachable and this required check fails on an unchanged
+          # repository, so a merged commit is pinned instead.
+          #
+          # Still a commit rather than a released tag: the newest tag, v2.0.0,
+          # predates the rename and keys this repository as `permit-pathways`,
+          # which the checker resolves by checkout basename. Pinning to it
+          # would fall to the `restricted` publication default and fail. Re-pin
+          # to a tag once one is cut after 553909b; see issue #74.
+          ref: 553909b463b7cf22569d7c56ce83a3e05d40a155
           ssh-key: ${{ secrets.STANDARDS_DEPLOY_KEY }}
           path: .standards
           persist-credentials: false
