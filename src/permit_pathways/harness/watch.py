@@ -58,7 +58,7 @@ FETCH_TIMEOUT_SECONDS = 30
 # A scheduled run must tolerate a transient blip without crying "changed".
 FETCH_ATTEMPTS = 3
 FETCH_BACKOFF_SECONDS = 2.0
-USER_AGENT = "permit-pathways-currency-watch/0.1"
+USER_AGENT = "permit-bearings-currency-watch/0.1"
 
 UnverifiableKind = Literal["transport", "not_found"]
 UNVERIFIABLE_KINDS: tuple[UnverifiableKind, ...] = ("transport", "not_found")
