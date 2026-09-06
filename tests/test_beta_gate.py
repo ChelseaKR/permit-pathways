@@ -1199,3 +1199,271 @@ def test_text_rejects_zero_width_space_only_content() -> None:
     with pytest.raises(ValueError, match="non-blank trimmed text"):
         beta_gate_module._text("\u200b", "field")
     assert beta_gate_module._text("visible text", "field") == "visible text"
+
+
+# --------------------------------------------------------------------------
+# Re-derivation
+#
+# Two ordinary maintenance acts move bytes this record pins — refreshing a
+# public source snapshot, and adopting a source-watch receipt — and until now
+# there was no command that re-derived the pins. These tests fix what the
+# command may and may not do: it re-derives what is mechanical, refuses the
+# immutable ledgers, never edits the module constant, and never touches export
+# profile membership.
+# --------------------------------------------------------------------------
+
+
+def _stale_receipt_repository(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    """A repository whose source state moved and whose pins were not re-derived.
+
+    This is the state a maintainer is left in after adopting a watch receipt:
+    the data is right, and every digest that depends on it is stale.
+    """
+
+    repository = _repository(tmp_path)
+    committed = (repository / DEFAULT_RECORD_PATH).read_bytes()
+    gate = _payload()
+    _source_state_variant(repository, gate, status="unverifiable")
+    # Undo the helper's hand re-pinning: the point is the stale record.
+    (repository / DEFAULT_RECORD_PATH).write_bytes(committed)
+    return repository, gate
+
+
+def _proposal(repository: Path) -> beta_gate_module.RecomputeProposal:
+    return beta_gate_module.recompute_beta_gate(
+        repository / DEFAULT_RECORD_PATH,
+        repository_root=repository,
+        today=TODAY,
+    )
+
+
+def test_recompute_is_a_no_op_against_the_committed_tree() -> None:
+    """The committed tree is already self-consistent, so nothing is proposed."""
+
+    proposal = beta_gate_module.recompute_beta_gate(
+        RECORD, repository_root=ROOT, today=TODAY
+    )
+
+    assert proposal.export_profile_changes == ()
+    assert proposal.record_changes == ()
+    assert proposal.record_bytes is None
+    assert proposal.export_profile_constant_change is None
+    assert proposal.blocked_on_export_profile_constant is False
+    assert proposal.changed is False
+
+
+def test_recompute_reports_the_module_constant_rather_than_rewriting_it(
+    tmp_path: Path,
+) -> None:
+    """The one anchor in Python source stays a person's attestation."""
+
+    repository, _ = _stale_receipt_repository(tmp_path)
+    source = Path(beta_gate_module.__file__).read_bytes()
+
+    proposal = _proposal(repository)
+
+    assert proposal.blocked_on_export_profile_constant is True
+    change = proposal.export_profile_constant_change
+    assert change is not None
+    assert change.field.endswith("_EXPORT_PROFILE_V2_SHA256")
+    assert change.recorded == beta_gate_module._EXPORT_PROFILE_V2_SHA256
+    assert change.recomputed == proposal.export_profile_sha256
+    # Blocked: the validator rejects the profile bytes before it reaches the
+    # aggregate, so the record cannot be re-derived in the same pass.
+    assert proposal.record_changes == ()
+    assert proposal.record_bytes is None
+    assert Path(beta_gate_module.__file__).read_bytes() == source
+
+
+def test_recompute_re_pins_only_the_digests_whose_bytes_moved(
+    tmp_path: Path,
+) -> None:
+    """Membership is never edited; only the digests of files that changed."""
+
+    repository, _ = _stale_receipt_repository(tmp_path)
+    before = json.loads(
+        (repository / "data/export/public-synthetic-evidence-v2.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    proposal = _proposal(repository)
+    after = json.loads(proposal.export_profile_bytes.decode("utf-8"))
+
+    assert [row["path"] for row in after["entries"]] == [
+        row["path"] for row in before["entries"]
+    ]
+    changed_paths = {
+        row["path"]
+        for row in before["entries"]
+        if row.get("raw_sha256")
+        != next(
+            other["raw_sha256"]
+            for other in after["entries"]
+            if other["path"] == row["path"]
+        )
+    }
+    assert changed_paths == {"data/source-status/current.json"}
+    assert {change.field for change in proposal.export_profile_changes} == {
+        "export profile v2.entries[data/source-status/current.json].raw_sha256"
+    }
+    # Nothing but the digests moved.
+    for row in before["entries"]:
+        row.pop("raw_sha256", None)
+    for row in after["entries"]:
+        row.pop("raw_sha256", None)
+    assert after == before
+
+
+def test_recompute_takes_the_aggregate_from_the_validator_not_from_hand(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second pass re-derives the record, and the result validates.
+
+    A previous hand re-pin rewrote binding digests without recomputing the
+    dependent `artifact_set_fingerprint`, and the record failed its own
+    self-consistency check. Every derived value here comes back from
+    `load_beta_gate`, which is the authority on all of them.
+    """
+
+    repository, _ = _stale_receipt_repository(tmp_path)
+    first = _proposal(repository)
+    profile_path = repository / "data/export/public-synthetic-evidence-v2.json"
+    profile_path.write_bytes(first.export_profile_bytes)
+
+    # Stand in for the maintainer's one-line attestation.
+    monkeypatch.setattr(
+        beta_gate_module,
+        "_EXPORT_PROFILE_V2_SHA256",
+        first.export_profile_sha256,
+    )
+
+    second = _proposal(repository)
+    assert second.blocked_on_export_profile_constant is False
+    assert second.record_bytes is not None
+    fields = {change.field for change in second.record_changes}
+    assert "artifact_bindings[source_state].sha256" in fields
+    assert "aggregate.artifact_set_fingerprint" in fields
+    assert "aggregate.unverifiable_source_count" in fields
+
+    (repository / DEFAULT_RECORD_PATH).write_bytes(second.record_bytes)
+    summary = load_beta_gate(
+        repository / DEFAULT_RECORD_PATH, repository_root=repository, today=TODAY
+    )
+    assert summary.unverifiable_source_count == 1
+    assert summary.beta_status == "not_run"
+    assert summary.record_status == "prepared"
+
+    # A re-pin is not a promotion: schema v1's fixed claims stay fixed.
+    aggregate = json.loads(second.record_bytes.decode("utf-8"))["aggregate"]
+    assert aggregate["status"] == "not_run"
+    assert aggregate["prepared_gate_count"] == 0
+    assert all(
+        value is False
+        for key, value in aggregate.items()
+        if key.startswith("supports_")
+    )
+
+
+def test_recompute_refuses_to_re_pin_an_immutable_not_run_ledger(
+    tmp_path: Path,
+) -> None:
+    """A rewritten planning ledger is refused, not laundered into a new pin."""
+
+    repository = _repository(tmp_path)
+    ledger = repository / "data/validation/woodland-content-review.json"
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload["gate"]["status"] = "passed"
+    _replace_json(ledger, payload)
+
+    with pytest.raises(ValueError, match="immutable not-run planning ledgers"):
+        _proposal(repository)
+
+
+def test_recompute_never_re_pins_a_frozen_artifact_role() -> None:
+    """The recomputable set is exactly the artifacts with no frozen pin."""
+
+    assert set(beta_gate_module.RECOMPUTABLE_ARTIFACT_IDS) == {
+        "reference_journey",
+        "reference_packet",
+        "rule_verification",
+        "source_state",
+    }
+    assert set(beta_gate_module.RECOMPUTABLE_ARTIFACT_IDS).isdisjoint(
+        beta_gate_module._NOT_RUN_ARTIFACT_SHA256
+    )
+
+
+def test_recompute_refuses_a_record_it_cannot_reproduce_byte_for_byte(
+    tmp_path: Path,
+) -> None:
+    """Re-pinning must not silently reformat the file being reviewed."""
+
+    repository = _repository(tmp_path)
+    record = repository / DEFAULT_RECORD_PATH
+    record.write_text(
+        json.dumps(json.loads(record.read_text(encoding="utf-8"))), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="refusing to rewrite it"):
+        _proposal(repository)
+
+
+def test_recompute_cli_reports_then_writes_in_two_attested_passes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repository, _ = _stale_receipt_repository(tmp_path)
+    arguments = ["recompute", "--repository-root", str(repository)]
+
+    assert main(arguments) == 1
+    dry_run = capsys.readouterr()
+    assert json.loads(dry_run.out)["blocked_on_export_profile_constant"] is True
+    assert "MAINTAINER ATTESTATION REQUIRED" in dry_run.err
+    assert "re-run with --write to apply" in dry_run.err
+
+    profile_path = repository / "data/export/public-synthetic-evidence-v2.json"
+    unwritten = profile_path.read_bytes()
+    assert main([*arguments, "--write"]) == 1
+    capsys.readouterr()
+    written = profile_path.read_bytes()
+    assert written != unwritten
+
+    monkeypatch.setattr(
+        beta_gate_module,
+        "_EXPORT_PROFILE_V2_SHA256",
+        f"sha256:{hashlib.sha256(written).hexdigest()}",
+    )
+    assert main([*arguments, "--write"]) == 0
+    applied = capsys.readouterr()
+    assert "re-pinned record validates" in applied.err
+
+    assert main(arguments) == 0
+    assert main(["validate", "--repository-root", str(repository)]) == 0
+
+
+def test_recompute_cli_refuses_and_leaves_the_tree_untouched(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository = _repository(tmp_path)
+    ledger = repository / "data/validation/woodland-participant-sessions.json"
+    payload = json.loads(ledger.read_text(encoding="utf-8"))
+    payload["record_id"] = "rewritten-participant-sessions"
+    _replace_json(ledger, payload)
+    assert (
+        ledger.read_bytes()
+        != (ROOT / "data/validation/woodland-participant-sessions.json").read_bytes()
+    )
+    profile_before = (
+        repository / "data/export/public-synthetic-evidence-v2.json"
+    ).read_bytes()
+    record_before = (repository / DEFAULT_RECORD_PATH).read_bytes()
+
+    assert main(["recompute", "--repository-root", str(repository), "--write"]) == 2
+    assert "REFUSED" in capsys.readouterr().err
+    assert (
+        repository / "data/export/public-synthetic-evidence-v2.json"
+    ).read_bytes() == profile_before
+    assert (repository / DEFAULT_RECORD_PATH).read_bytes() == record_before

@@ -221,8 +221,8 @@ def test_the_fetch_identifies_itself():
             puller.query()
     finally:
         puller.urllib.request.Request = original
-    assert captured.get("User-Agent") == "permit-pathways-hau-letters-watch/0.1"
-    assert "permit-pathways" in captured["User-Agent"]
+    assert captured.get("User-Agent") == "permit-bearings-hau-letters-watch/0.1"
+    assert "permit-bearings" in captured["User-Agent"]
 
 
 def test_drift_defaults_are_empty():

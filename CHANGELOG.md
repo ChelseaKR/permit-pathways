@@ -5,7 +5,84 @@ published a versioned release.
 
 ## [Unreleased]
 
+### Added
+
+- `beta_gate_cli recompute` re-derives the digests that ordinary maintenance
+  moves, so re-pinning them stops being a hand-edit of a tamper-evidence
+  chain. Two routine acts change bytes this repository pins by hash —
+  refreshing the HCD accountability-letter snapshot (#63) and adopting a
+  source-watch receipt (#140) — and both landed on the same four-step chain
+  with no tooling: the v2 export profile's entry digests, the
+  `_EXPORT_PROFILE_V2_SHA256` constant, the record's `artifact_bindings`
+  digests, and the dependent `aggregate.artifact_set_fingerprint` and counts.
+  Doing that by hand has already failed once, in #80: six binding digests were
+  rewritten without recomputing the dependent fingerprint, and the record
+  failed its own self-consistency check.
+  - Every derived value comes back from `load_beta_gate` itself. `recompute`
+    applies the digests it can read from bytes, lets the validator reject the
+    aggregate, and takes the recomputed aggregate verbatim from the rejection,
+    so it cannot re-pin to a value the validator would refuse.
+  - It cannot promote anything. Schema v1's fixed aggregate — `not_run`, zero
+    prepared gates, every stronger-claim boolean false — is what the validator
+    recomputes, and a test asserts a re-pin reproduces it.
+  - It refuses the immutable not-run planning ledgers outright rather than
+    re-pinning them, naming the artifact, and writes nothing in that case.
+    Their independent raw bytes are what stops a favourable nested result
+    being rewritten together with its digest.
+  - It reports `_EXPORT_PROFILE_V2_SHA256` rather than editing it. That
+    constant is the anchor over the export profile and lives in Python source;
+    moving it stays a maintainer attestation with a one-line diff. A refresh
+    is therefore two passes with that attestation in between, which is why the
+    command exits 1 rather than 0 while it is pending.
+  - Export profile membership is never edited — an entry's `raw_sha256` is
+    only ever updated in place — so this cannot add a file to the
+    public/synthetic export or drop one from it. Adding or removing a member
+    still requires a new, separately reviewed profile version.
+  - It refuses to rewrite any file whose committed bytes it cannot reproduce
+    exactly, so a re-pin can never also reformat the file being reviewed.
+
 ### Fixed
+
+- The two source watchers stopped announcing a repository that no longer
+  exists. `scripts/pull_hau_letters.py` and
+  `src/permit_pathways/harness/watch.py` sent
+  `permit-pathways-hau-letters-watch/0.1` and
+  `permit-pathways-currency-watch/0.1` as their outbound `User-Agent`, so the
+  HCD and legislative servers this project polls have been logging a project
+  name that only resolves through GitHub's rename redirect — and that redirect
+  survives only while nobody else claims `ChelseaKR/permit-pathways`. Both now
+  name `permit-bearings`. `CITATION.cff`'s `repository-code` and
+  `[project.urls]` did the same to anyone citing or linking the work, and now
+  point at the current URL directly.
+  - This is the externally visible slice of #111 only. The distribution name,
+    the `src/permit_pathways` import package and the deployed Lambda's build
+    are deliberately untouched: moving those has to be sequenced with a
+    rebuild and apply of `deploy/ai-service/`, which is not a repository-only
+    change. #111 stays open for that.
+  - A contract test asserts both user agents and both citation surfaces name
+    the current repository, so the next straggler fails rather than shipping.
+
+- Two date validators compared against the host machine's local calendar
+  instead of UTC, so the same bytes passed or failed depending on where and
+  when they were checked. `jurisdictions._required_recorded_date` (the
+  `retrieved_on` guard on the HCD letter dataset, which is emitted straight
+  into the browser bundle) and `conformance_evaluation.load_answer_key` (the
+  `law_as_of` / `check_registry_as_of` future-date guard) both called
+  `date.today()`. West of UTC that rejects a dataset stamped with the current
+  UTC date — a `build_hcd_letters.py <today>` run during a Pacific evening
+  fails `retrieved_on: cannot be in the future` locally while the identical
+  file passes in CI. East of UTC it does the opposite and accepts a record
+  dated a day into the future, which is precisely what the guard exists to
+  stop. `assets/demo.js` has always compared these fields against `Date.UTC`,
+  and `permit_pathways.dates.resolve_today` exists so the Python runtimes
+  agree with it; these two callers had simply never been moved onto it.
+  `build_coverage_index` now takes the same injectable `today` every other
+  validator here does, and a test asserts no module under `src/` or
+  `scripts/` reintroduces `date.today()`.
+  - `scripts/readability_gate.py` stamped a regenerated baseline's
+    `generated_on` from the local clock for the same reason; it now records
+    the UTC date, so a committed baseline says the same thing wherever it was
+    regenerated.
 
 - The Bedrock provider default is a model this project's AWS account can
   actually invoke. `DEFAULT_BEDROCK_MODEL` was

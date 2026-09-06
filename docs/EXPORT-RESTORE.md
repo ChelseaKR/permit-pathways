@@ -155,3 +155,18 @@ checks. A new profile version is required when membership, classification,
 privacy posture, archive format, or claim boundary changes. Never broaden this
 ordinary ZIP profile to applicant, reviewer, participant, or other sensitive
 records.
+
+`beta_gate_cli recompute` produces the refresh and the diff to review. It
+re-derives each entry's `raw_sha256` in place and never edits membership, so
+it cannot add a file to this profile or drop one from it — that still needs a
+new profile version. It stops before two things on purpose:
+
+- **`_EXPORT_PROFILE_V2_SHA256`** in `src/permit_pathways/beta_gate.py`. This
+  constant is the tamper-evidence anchor over the profile itself, and the
+  command reports the new value rather than writing it. Re-pinning it is a
+  maintainer attestation with a one-line diff, made after reading the profile
+  diff — so a refresh is two passes, with the attestation between them.
+- **The immutable not-run planning ledgers** (`_NOT_RUN_ARTIFACT_SHA256`). If
+  one of those changed, the command refuses outright and writes nothing.
+  Their independent raw bytes are what stops a favourable nested result being
+  rewritten together with its digest.

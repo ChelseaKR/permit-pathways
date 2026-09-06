@@ -1,3 +1,5 @@
+import time
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -177,3 +179,70 @@ def test_coverage_index_rejects_invalid_hcd_retrieval_date(
 
     with pytest.raises(ValueError, match=message):
         build_coverage_index(registry_path, rules_dir, letters_path)
+
+
+def _minimal_coverage_inputs(tmp_path: Path, retrieved_on: str) -> tuple[Path, ...]:
+    registry_path = tmp_path / "registry.json"
+    registry_path.write_text(
+        '{"jurisdictions":[{"slug":"known-city","name":"Known City",'
+        '"kind":"city","county":"Example County"}]}',
+        encoding="utf-8",
+    )
+    rules_dir = tmp_path / "rules"
+    rules_dir.mkdir()
+    (rules_dir / "statewide.json").write_text(
+        '[{"rule_id":"statewide-rule","jurisdiction_scope":"statewide"}]',
+        encoding="utf-8",
+    )
+    letters_path = tmp_path / "hcd-letters.json"
+    letters_path.write_text(
+        f'{{"retrieved_on":"{retrieved_on}","letter_count":0,'
+        '"source":"Official test dataset","letters":{},'
+        '"_statewide":[],"_unmatched":{}}',
+        encoding="utf-8",
+    )
+    return registry_path, rules_dir, letters_path
+
+
+def test_hcd_retrieval_date_is_compared_against_an_injectable_date(tmp_path):
+    """The comparison date is a parameter, so a build is reproducible."""
+
+    registry_path, rules_dir, letters_path = _minimal_coverage_inputs(
+        tmp_path, "2026-08-03"
+    )
+
+    index = build_coverage_index(
+        registry_path, rules_dir, letters_path, today=date(2026, 8, 3)
+    )
+    assert index["hcd_dataset"]["retrieved_on"] == "2026-08-03"
+
+    with pytest.raises(ValueError, match="cannot be in the future"):
+        build_coverage_index(
+            registry_path, rules_dir, letters_path, today=date(2026, 8, 2)
+        )
+
+
+def test_hcd_retrieval_date_uses_utc_not_the_host_timezone(tmp_path, monkeypatch):
+    """A timezone ahead of UTC must not wave a future retrieval date through.
+
+    `date.today()` resolves against the host's local calendar. In UTC+14 that
+    is tomorrow's date for ten hours of every day, so a record stamped a day
+    ahead of UTC — which is exactly what this check exists to reject — was
+    accepted, while west of UTC the same check failed records stamped with a
+    perfectly valid UTC date. `assets/demo.js` compares the same field
+    against `Date.UTC`, so UTC is the calendar both runtimes must use.
+    """
+
+    tomorrow_utc = datetime.now(UTC).date() + timedelta(days=1)
+    registry_path, rules_dir, letters_path = _minimal_coverage_inputs(
+        tmp_path, tomorrow_utc.isoformat()
+    )
+
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")  # UTC+14, no DST
+    time.tzset()
+    try:
+        with pytest.raises(ValueError, match="cannot be in the future"):
+            build_coverage_index(registry_path, rules_dir, letters_path)
+    finally:
+        monkeypatch.undo()
+        time.tzset()

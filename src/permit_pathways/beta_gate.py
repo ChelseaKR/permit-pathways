@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import tempfile
 import unicodedata
@@ -433,6 +434,23 @@ _GATE_CONTRACTS: dict[str, tuple[tuple[str, ...], str]] = {
         "reachable_human_review_not_established",
     ),
 }
+
+
+class AggregateMismatch(ValueError):
+    """The recorded aggregate disagrees with the validator's recomputation.
+
+    ``expected`` carries the validator's own recomputed aggregate, so a
+    maintainer re-pinning the record after a legitimate artifact change never
+    has to derive ``artifact_set_fingerprint`` or the dependent counts by
+    hand.  Hand-derivation is the failure this repository has already had: a
+    previous attempt rewrote six ``artifact_bindings`` digests without
+    recomputing the dependent fingerprint, and the record failed its own
+    self-consistency check.
+    """
+
+    def __init__(self, expected: dict[str, Any]) -> None:
+        super().__init__(f"aggregate: expected {expected!r}")
+        self.expected = expected
 
 
 class _DuplicateKey(ValueError):
@@ -2768,7 +2786,8 @@ def _validate_aggregate(
         "unverifiable_source_count": unverifiable_source_count,
         "unverified_rule_count": unverified_rule_count,
     }
-    _exact(aggregate, expected, "aggregate")
+    if not _strict_equal(aggregate, expected):
+        raise AggregateMismatch(expected)
     return fingerprint
 
 
@@ -2921,4 +2940,344 @@ def load_beta_gate(
         unverifiable_source_count=len(source_state.unverifiable_source_ids),
         reference_currency_blocker_ids=reference_currency_blocker_ids,
         record_sha256=_sha256(raw),
+    )
+
+
+# --------------------------------------------------------------------------
+# Re-derivation
+#
+# Two ordinary maintenance acts — refreshing a public source snapshot and
+# adopting a source-watch receipt — change bytes this record pins, and there
+# was no command that re-derived the pins.  Doing it by hand has already gone
+# wrong once, so this section re-derives every mechanical pin from canonical
+# inputs and leaves the two attestations that are not mechanical to a person:
+#
+#   * ``_NOT_RUN_ARTIFACT_SHA256`` — the immutable not-run planning ledgers.
+#     Re-pinning these is refused outright.  Their independent raw bytes are
+#     what stops a coordinated rewrite of a favourable nested result, and a
+#     tool that re-derived them would hand exactly that back.
+#   * ``_EXPORT_PROFILE_V2_SHA256`` — a constant in this module.  It is
+#     reported, never edited, so moving the tamper-evidence anchor over the
+#     export profile stays a deliberate act with a one-line diff.
+# --------------------------------------------------------------------------
+
+RECOMPUTABLE_ARTIFACT_IDS = tuple(
+    artifact_id
+    for artifact_id in _ARTIFACT_IDS
+    if artifact_id not in _NOT_RUN_ARTIFACT_SHA256
+)
+
+
+@dataclass(frozen=True)
+class PinChange:
+    """One re-derived value, with what it replaces."""
+
+    field: str
+    recorded: Any
+    recomputed: Any
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "field": self.field,
+            "recorded": self.recorded,
+            "recomputed": self.recomputed,
+        }
+
+
+@dataclass(frozen=True)
+class RecomputeProposal:
+    """Re-derived pins, as bytes to write plus a reviewable field-by-field diff."""
+
+    export_profile_path: str
+    export_profile_changes: tuple[PinChange, ...]
+    export_profile_bytes: bytes
+    export_profile_sha256: str
+    export_profile_constant_change: PinChange | None
+    record_path: str
+    record_changes: tuple[PinChange, ...]
+    record_bytes: bytes | None
+
+    @property
+    def blocked_on_export_profile_constant(self) -> bool:
+        """Whether re-pinning the module constant must happen before the record.
+
+        ``load_beta_gate`` rejects the export profile's bytes before it reaches
+        the aggregate, so while the constant is stale the record's own pins
+        cannot be re-derived at all.  The refresh is therefore two passes with
+        a human attestation between them, which is the point.
+        """
+
+        return self.export_profile_constant_change is not None
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.export_profile_changes or self.record_changes)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return stable machine-readable CLI output."""
+
+        return {
+            "blocked_on_export_profile_constant": (
+                self.blocked_on_export_profile_constant
+            ),
+            "export_profile": {
+                "changes": [change.to_dict() for change in self.export_profile_changes],
+                "constant_change": (
+                    self.export_profile_constant_change.to_dict()
+                    if self.export_profile_constant_change is not None
+                    else None
+                ),
+                "path": self.export_profile_path,
+                "sha256": self.export_profile_sha256,
+            },
+            "record": {
+                "changes": [change.to_dict() for change in self.record_changes],
+                "path": self.record_path,
+                "recomputed": self.record_bytes is not None,
+            },
+        }
+
+
+def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
+    """Serialise in the committed two-space form, key order preserved."""
+
+    return (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _reserialisable(raw: bytes, payload: dict[str, Any], field: str) -> None:
+    """Refuse to rewrite a file this module cannot reproduce byte for byte.
+
+    A re-pin must change only the digests it re-derived.  If re-serialising the
+    untouched payload does not reproduce the committed bytes, writing would
+    also reformat the file, and the reviewer of the diff could no longer see
+    at a glance that nothing else moved.
+    """
+
+    if _canonical_json_bytes(payload) != raw:
+        raise ValueError(
+            f"{field}: committed bytes are not the canonical two-space JSON form, "
+            "so re-pinning would reformat the file; refusing to rewrite it"
+        )
+
+
+def _recompute_export_profile(root: Path) -> tuple[bytes, tuple[PinChange, ...]]:
+    """Re-derive every ``raw_sha256`` in the v2 export profile from the tree.
+
+    Membership is never touched: an entry is only ever updated in place, so
+    this cannot add a file to the public/synthetic export or drop one from it.
+    ``docs/EXPORT-RESTORE.md`` requires "an explicit profile digest refresh and
+    review" whenever a selected file changes; this produces the refresh and the
+    diff to review.
+    """
+
+    field = "export profile v2"
+    raw = _read_repository_file(
+        root, _EXPORT_PROFILE_V2_PATH, field, maximum=MAX_ARTIFACT_BYTES
+    )
+    payload = _decode_json(raw, field, maximum=MAX_ARTIFACT_BYTES)
+    _reserialisable(raw, payload, field)
+
+    changes: list[PinChange] = []
+    entries = _array(payload.get("entries"), f"{field}.entries")
+    for index, item in enumerate(entries):
+        entry = _object(item, f"{field}.entries[{index}]")
+        if entry.get("self_reference") is True:
+            continue
+        relative = _canonical_relative_path(
+            entry.get("path"), f"{field}.entries[{index}].path"
+        )
+        recorded = _fingerprint(
+            entry.get("raw_sha256"), f"{field}.entries[{index}].raw_sha256"
+        )
+        recomputed = _sha256(
+            _read_repository_file(
+                root,
+                relative,
+                f"{field}.entries[{index}].path",
+                maximum=MAX_ARTIFACT_BYTES,
+            )
+        )
+        if recomputed == recorded:
+            continue
+        entry["raw_sha256"] = recomputed
+        changes.append(
+            PinChange(
+                field=f"export profile v2.entries[{relative}].raw_sha256",
+                recorded=recorded,
+                recomputed=recomputed,
+            )
+        )
+    return _canonical_json_bytes(payload), tuple(changes)
+
+
+def _recompute_binding_pins(
+    payload: dict[str, Any], root: Path
+) -> tuple[PinChange, ...]:
+    """Re-derive the mutable artifact digests in place, refusing the frozen ones."""
+
+    changes: list[PinChange] = []
+    frozen: list[str] = []
+    rows = _array(payload.get("artifact_bindings"), "artifact_bindings")
+    for index, item in enumerate(rows):
+        field = f"artifact_bindings[{index}]"
+        row = _object(item, field)
+        artifact_id = _stable_id(row.get("artifact_id"), f"{field}.artifact_id")
+        if artifact_id not in _ARTIFACT_PATHS:
+            raise ValueError(f"{field}.artifact_id: unsupported artifact role")
+        relative = _canonical_relative_path(row.get("path"), f"{field}.path")
+        recorded = _fingerprint(row.get("sha256"), f"{field}.sha256")
+        recomputed = _sha256(
+            _read_repository_file(
+                root, relative, f"{field}.path", maximum=MAX_ARTIFACT_BYTES
+            )
+        )
+        if recomputed == recorded:
+            continue
+        if artifact_id in _NOT_RUN_ARTIFACT_SHA256:
+            frozen.append(f"{artifact_id} ({relative})")
+            continue
+        row["sha256"] = recomputed
+        changes.append(
+            PinChange(
+                field=f"artifact_bindings[{artifact_id}].sha256",
+                recorded=recorded,
+                recomputed=recomputed,
+            )
+        )
+    if frozen:
+        raise ValueError(
+            "immutable not-run planning ledgers changed and will not be re-pinned: "
+            + ", ".join(sorted(frozen))
+            + ". Schema v1 pins their raw bytes so a favourable nested result "
+            "cannot be rewritten together with its digest; recording executed "
+            "evidence needs a separately reviewed execution schema, not a "
+            "re-pin. Restore the committed bytes, or change the schema."
+        )
+    return tuple(changes)
+
+
+def _aggregate_changes(
+    recorded: dict[str, Any], recomputed: dict[str, Any]
+) -> tuple[PinChange, ...]:
+    keys = sorted(set(recorded) | set(recomputed))
+    return tuple(
+        PinChange(
+            field=f"aggregate.{key}",
+            recorded=recorded.get(key),
+            recomputed=recomputed.get(key),
+        )
+        for key in keys
+        if not _strict_equal(recorded.get(key), recomputed.get(key))
+    )
+
+
+def _validated_record_bytes(
+    payload: dict[str, Any],
+    *,
+    root: Path,
+    today: date | None,
+) -> tuple[bytes, dict[str, Any]]:
+    """Return record bytes the validator accepts, with its recomputed aggregate.
+
+    Every derived value comes back from ``load_beta_gate`` itself.  Nothing in
+    this function computes an aggregate count, a blocking gate list or a
+    dependent fingerprint independently, so the record cannot be re-pinned to
+    a value the validator would reject.
+    """
+
+    candidate = json.loads(json.dumps(payload))
+    aggregate = _object(candidate.get("aggregate"), "aggregate")
+    aggregate["artifact_set_fingerprint"] = artifact_set_fingerprint(
+        _binding_rows(candidate.get("artifact_bindings"))
+    )
+
+    scratch = Path(tempfile.mkdtemp(prefix="beta-gate-recompute.")).resolve()
+    try:
+        draft = scratch / "candidate.json"
+        for _attempt in range(2):
+            raw = _canonical_json_bytes(candidate)
+            draft.write_bytes(raw)
+            try:
+                load_beta_gate(draft, repository_root=root, today=today)
+            except AggregateMismatch as mismatch:
+                candidate["aggregate"] = mismatch.expected
+                continue
+            return raw, _object(candidate["aggregate"], "aggregate")
+        raise ValueError(
+            "aggregate: the validator's recomputation did not settle; "
+            "re-pin by hand and report this"
+        )
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def recompute_beta_gate(
+    path: Path = DEFAULT_RECORD_PATH,
+    *,
+    repository_root: Path | None = None,
+    today: date | None = None,
+) -> RecomputeProposal:
+    """Re-derive the mechanical pins over the current tree, without writing.
+
+    Returns bytes to write plus the field-by-field diff to review.  It cannot
+    turn a ``not_run`` record into a favourable one: the immutable ledgers are
+    refused, the export profile's membership is untouched, and the aggregate
+    is whatever ``load_beta_gate`` recomputes.
+    """
+
+    root = _repository_root(
+        repository_root
+        if repository_root is not None
+        else Path(__file__).resolve().parents[2]
+    )
+    profile_bytes, profile_changes = _recompute_export_profile(root)
+    profile_sha256 = _sha256(profile_bytes)
+    constant_change = (
+        None
+        if profile_sha256 == _EXPORT_PROFILE_V2_SHA256
+        else PinChange(
+            field="src/permit_pathways/beta_gate.py::_EXPORT_PROFILE_V2_SHA256",
+            recorded=_EXPORT_PROFILE_V2_SHA256,
+            recomputed=profile_sha256,
+        )
+    )
+
+    if _is_canonical_record(path, root):
+        raw = _read_repository_file(
+            root,
+            DEFAULT_RECORD_PATH.as_posix(),
+            "aggregate gate",
+            maximum=MAX_RECORD_BYTES,
+        )
+        payload = _decode_json(raw, "aggregate gate", maximum=MAX_RECORD_BYTES)
+    else:
+        payload, raw = _read_external_record(path)
+    _reserialisable(raw, payload, "aggregate gate")
+    recorded_aggregate = dict(_object(payload.get("aggregate"), "aggregate"))
+
+    # Always run, even when the export profile constant blocks the rest: a
+    # changed immutable ledger must be refused whatever else is pending.
+    binding_changes = _recompute_binding_pins(payload, root)
+
+    record_changes: tuple[PinChange, ...] = ()
+    record_bytes: bytes | None = None
+    if constant_change is None:
+        record_bytes, recomputed_aggregate = _validated_record_bytes(
+            payload, root=root, today=today
+        )
+        record_changes = binding_changes + _aggregate_changes(
+            recorded_aggregate, recomputed_aggregate
+        )
+        if record_bytes == raw:
+            record_bytes = None
+
+    return RecomputeProposal(
+        export_profile_path=_EXPORT_PROFILE_V2_PATH,
+        export_profile_changes=profile_changes,
+        export_profile_bytes=profile_bytes,
+        export_profile_sha256=profile_sha256,
+        export_profile_constant_change=constant_change,
+        record_path=path.as_posix(),
+        record_changes=record_changes,
+        record_bytes=record_bytes,
     )

@@ -35,8 +35,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/ChelseaKR/permit-pathways"
-Documentation = "https://github.com/ChelseaKR/permit-pathways/tree/main/docs"
+Homepage = "https://github.com/ChelseaKR/permit-bearings"
+Documentation = "https://github.com/ChelseaKR/permit-bearings/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/permit_pathways"]

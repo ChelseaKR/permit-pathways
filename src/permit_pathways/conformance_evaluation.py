@@ -30,6 +30,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from .conformance import load_checks, scan
+from .dates import resolve_today
 
 SCHEMA_VERSION = 1
 REFERENCE_LABELS = (
@@ -920,7 +921,7 @@ def load_answer_key(  # noqa: C901 - reviewer/adjudication invariants are explic
     registry_as_of = _iso_date(
         payload.get("check_registry_as_of"), "answer key.check_registry_as_of"
     )
-    current_date = date.today() if today is None else today
+    current_date = resolve_today(today)
     if date.fromisoformat(law_as_of) > current_date:
         raise ValueError("answer key.law_as_of: future source state is not allowed")
     if date.fromisoformat(registry_as_of) > current_date:

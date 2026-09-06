@@ -35,7 +35,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW = ROOT / "corpus" / "hcd" / "hau-letters-raw.json"
-USER_AGENT = "permit-pathways-hau-letters-watch/0.1"
+USER_AGENT = "permit-bearings-hau-letters-watch/0.1"
 JURISDICTION_COLUMN = 0  # u_jurisdiction_1_display_value
 MAX_LISTED = 12
 RESOURCE_KEY = "049c27c4-70aa-45c0-8ebd-5a224d4b44ed"
