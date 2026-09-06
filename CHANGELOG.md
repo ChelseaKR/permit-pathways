@@ -44,6 +44,34 @@ published a versioned release.
     those dates, and the Amtrak candidate still comes from the statewide
     dataset.
 
+- **The evidence export can be signed, and an unsigned one says so.**
+  `evidence_export_cli build --sign-key <key>` writes a detached OpenSSH
+  signature to `<archive>.sig.json`; `verify` and `restore` take
+  `--allowed-signers <file>` or `--use-repository-signers` (issue #137).
+  - **The archive bytes are identical with and without signing.** The signed
+    payload is a short canonical statement naming the archive's SHA-256
+    together with the package id, freeze, commit and profile, so the ZIP format
+    and the determinism gate are untouched and a signature cannot be moved to a
+    different package.
+  - **Absence is a state, never an inference.** An unsigned archive reports
+    `absent`; a signature nobody asked to check reports `not_checked`. Neither
+    is ever reported as `verified`, and an empty or comment-only signers file
+    accepts nobody rather than reading as "cannot tell, so allow".
+  - Three distinct exit codes, because the three findings call for different
+    responses: `3` unsigned, `4` the bytes are not what was signed, `5` the
+    signer is not listed. `ssh-keygen -Y verify` prints the same message for
+    the last two, so listing is decided by parsing the signers file rather than
+    by reading OpenSSH's wording.
+  - When a signers file is supplied, **the signature is settled before the
+    archive is opened**: one altered byte moves the digest the signature covers
+    and is reported as a broken signature, not as a changed member. A refused
+    `restore` therefore publishes nothing.
+  - Without `--allowed-signers` nothing is gated, so every existing unsigned
+    package and every prior `verify` invocation behaves exactly as before.
+  - `make evidence-export-check` now round-trips both an unsigned and a signed
+    build with a throwaway key, asserts the two archives are byte-identical,
+    and asserts that the unsigned one fails an authenticity check.
+
 - The source watch now reports, per rule, whether the text that rule quotes
   still occurs in a source whose content hash moved. A changed hash stales
   every dependent rule, which is correct and deliberately coarse: a footer
