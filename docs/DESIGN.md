@@ -564,7 +564,13 @@ readiness evaluator, the build, or the bundle.
   rule stale. For a source whose hash moved, the watcher also holds each
   dependent rule's recorded excerpt against the text it just fetched and
   records `excerpt_survives`, `excerpt_lost`, or `not_checkable` per rule,
-  using the same normalization as the AI layer's citation verifier. That
+  using the same normalization as the AI layer's citation verifier. A verdict
+  is issued only where it is earned: the changed document must be the one the
+  rule quotes — depending on a source is not quoting it — and the excerpt must
+  occur verbatim in the retained copy first, because several recorded
+  excerpts are curated citations with editorial brackets rather than raw
+  quotations. Everything else is `not_checkable` and says which of the two it
+  was, so `excerpt_lost` means "this text was here and is not any more". That
   ordering signal stales nothing extra and clears nothing: a rule whose
   excerpt survived is still on hold until a person re-verifies it, because
   surrounding text can change what the same sentence means. A source that

@@ -83,12 +83,36 @@ def rules_depending_on(source_id: str, rules: Iterable[Rule]) -> tuple[Rule, ...
 
 def survival_for_source(
     source_id: str,
+    source_url: str,
     rules: Iterable[Rule],
     *,
     new_text: str | None,
+    previous_text: str | None = None,
     not_checkable_reason: str | None = None,
 ) -> tuple[RuleExcerptSurvival, ...]:
     """Hold every dependent rule's excerpt against a source's new text.
+
+    ``source_url`` is the watched source's registry key, and it is required
+    rather than optional on purpose. **Depending on a source is not the same
+    as quoting it.** Thirteen of the fifteen rules that depend on the HCD ADU
+    Handbook quote a statute instead and merely lean on the Handbook for
+    context; their excerpts were never in that PDF, so testing them against it
+    would report thirteen rules as having lost text they never carried. A rule
+    is given a verdict only when the changed document is the one it quotes —
+    the same "cites" versus "depends on" line ``citationSourceId()`` already
+    draws in the browser. The rest are ``not_checkable``: still stale, because
+    the source they depend on moved, but with nothing here to say about them.
+
+    ``previous_text`` is the retained copy the recorded digest was taken from,
+    and it is what makes ``excerpt_lost`` mean anything. This project's
+    excerpts are curated citations, not raw quotations: many carry editorial
+    brackets condensing a list, so they do not occur verbatim in the source
+    even now. Measured over the committed corpus, twelve of nineteen would
+    report ``excerpt_lost`` against a document that had not changed at all. So
+    a verdict is issued only for an excerpt that occurs verbatim in the
+    retained copy *first*; the rest are ``not_checkable``. ``excerpt_lost``
+    therefore means "this text was there and is not any more" — a fact about
+    the change — rather than "this text is not there", which was already true.
 
     ``new_text`` is ``None`` when the document could not be read at all. Every
     dependent rule is then ``not_checkable`` with ``not_checkable_reason`` —
@@ -109,9 +133,22 @@ def survival_for_source(
         )
 
     haystack = normalize_for_match(new_text)
+    baseline = normalize_for_match(previous_text) if previous_text is not None else None
     results: list[RuleExcerptSurvival] = []
     for rule in dependents:
         rule_id = rule.rule_id
+        if rule.citation.url != source_url:
+            results.append(
+                RuleExcerptSurvival(
+                    rule_id=rule_id,
+                    status="not_checkable",
+                    reason=(
+                        "the rule depends on this source but quotes a different "
+                        "one, so its excerpt is not in this document"
+                    ),
+                )
+            )
+            continue
         excerpt = _excerpt_of(rule)
         if excerpt is None:
             results.append(
@@ -129,6 +166,35 @@ def survival_for_source(
                     rule_id=rule_id,
                     status="not_checkable",
                     reason="the excerpt normalizes to nothing matchable",
+                )
+            )
+            continue
+        if baseline is None:
+            results.append(
+                RuleExcerptSurvival(
+                    rule_id=rule_id,
+                    status="not_checkable",
+                    reason=(
+                        "no retained copy was available to establish what this "
+                        "excerpt looked like before the change"
+                    ),
+                )
+            )
+            continue
+        if needle not in baseline:
+            # Not a defect in the rule: an excerpt may legitimately be an
+            # edited citation. It just cannot be tracked by verbatim survival,
+            # and saying `excerpt_lost` about it would report the editing as
+            # if the source had dropped the text.
+            results.append(
+                RuleExcerptSurvival(
+                    rule_id=rule_id,
+                    status="not_checkable",
+                    reason=(
+                        "the recorded excerpt is an edited citation rather than "
+                        "a verbatim quote of the retained copy, so verbatim "
+                        "survival cannot be tested"
+                    ),
                 )
             )
             continue
