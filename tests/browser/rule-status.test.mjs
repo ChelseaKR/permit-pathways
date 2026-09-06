@@ -147,14 +147,23 @@ describe("a withdrawn citation costs the link and nothing else", () => {
     assert.deepEqual(demo.get("notFoundSourceIds")(), []);
   });
 
-  test("the committed receipt records no withdrawn citation today", () => {
-    // Dormant on the committed state, per ADR 0005. If this ever fails, a
-    // receipt carrying a 404 was adopted and the evidence page should say so.
+  test("the committed receipt records exactly the Davis handout as withdrawn", () => {
+    // No longer dormant: the receipt adopted from the 2026-08-31 watch run
+    // carries the 404 ADR 0005 was written for, so the evidence page and the
+    // Davis result card both say so. Pinned to exactly one source, so the next
+    // dead link has to be adopted deliberately rather than arriving unnoticed.
     const receipt = readJson("data", "source-status", "current.json");
     const observations = receipt.observations ?? receipt.receipt?.observations ?? [];
     const withdrawn = observations.filter(
       (item) => item.unverifiable_kind === "not_found",
     );
-    assert.deepEqual(withdrawn, []);
+    assert.deepEqual(
+      withdrawn.map((item) => item.source_id),
+      ["davis-adu-handout-2026"],
+    );
+    // A withdrawn address is not a changed law: nothing may be marked stale.
+    assert.deepEqual(receipt.changed_source_ids, []);
+    assert.equal(withdrawn[0].reason, "HTTP 404 Not Found");
+    assert.equal(withdrawn[0].observed_sha256, null);
   });
 });

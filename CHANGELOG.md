@@ -43,6 +43,26 @@ published a versioned release.
 
 ### Fixed
 
+- The committed source-state receipt reported a withdrawn address as verified.
+  `davis-adu-handout-2026` answers `HTTP 404 Not Found` at its published
+  address, but `data/source-status/current.json` still carried the last
+  successful watch: `status: "unchanged"`, with `observed_sha256` holding the
+  same digest as `recorded_sha256`, as though the document had been fetched
+  and matched. A failed read was published as a successful verification, which
+  is the one thing a currency receipt exists to rule out. The receipt from the
+  run that actually observed the 404 is now the committed one, so the source
+  reports `unverifiable` / `not_found` and appears in
+  `unverifiable_source_ids`.
+  - Nothing is marked stale by it. Per ADR 0005 an unverifiable source is not
+    evidence that the law moved: the retained copy last confirmed 2026-07-30
+    still stands, all 19 rules and 29 Golden cases stay unaffected, and the
+    harness still exits 0. A withdrawn link is a publication fact, not a
+    finding about the law, and it must not move an exit code.
+  - The digests that depend on those bytes moved with it — the record's
+    `artifact_bindings[source_state]`, the v2 export profile entry and its
+    `_EXPORT_PROFILE_V2_SHA256` anchor, and the dependent
+    `aggregate.artifact_set_fingerprint` and `unverifiable_source_count`.
+
 - The two source watchers stopped announcing a repository that no longer
   exists. `scripts/pull_hau_letters.py` and
   `src/permit_pathways/harness/watch.py` sent

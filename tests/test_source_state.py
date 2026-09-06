@@ -19,9 +19,9 @@ SOURCES = ROOT / "data" / "sources.json"
 RULES = ROOT / "data" / "rules"
 GOLDEN = ROOT / "data" / "golden" / "example.json"
 CURRENT = ROOT / "data" / "source-status" / "current.json"
-CHECKED_AT = "2026-08-03T17:08:28Z"
-COMMIT_SHA = "8d841409dc5fd16fe56b52a8b57c826c07f176a6"
-RUN_URL = "https://github.com/ChelseaKR/permit-pathways/actions/runs/30835371749"
+CHECKED_AT = "2026-08-31T15:12:05Z"
+COMMIT_SHA = "e67094951f97a0f84797a38efc59d9f23c517d9a"
+RUN_URL = "https://github.com/ChelseaKR/permit-bearings/actions/runs/33407059344"
 
 
 def _unchanged_watch() -> WatchResult:
@@ -74,7 +74,11 @@ def test_committed_snapshot_binds_the_exact_successful_watch_run():
     assert snapshot.receipt.commit_sha == COMMIT_SHA
     assert len(snapshot.observations) == 19
     assert snapshot.changed_source_ids == ()
-    assert snapshot.unverifiable_source_ids == ()
+    # One cited address answered 404 in the run this receipt binds. Per ADR
+    # 0005 that is reported and stales nothing: no source changed, so no rule
+    # or Golden case is affected and all 19/29 stay unaffected below.
+    assert snapshot.unverifiable_source_ids == ("davis-adu-handout-2026",)
+    assert snapshot.not_found_source_ids == ("davis-adu-handout-2026",)
     assert snapshot.affected_rule_ids == ()
     assert snapshot.affected_golden_case_ids == ()
     assert len(snapshot.unaffected_rule_ids) == 19

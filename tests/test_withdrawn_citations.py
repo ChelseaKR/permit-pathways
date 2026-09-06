@@ -42,9 +42,9 @@ SOURCES = ROOT / "data" / "sources.json"
 RULES = ROOT / "data" / "rules"
 GOLDEN = ROOT / "data" / "golden" / "example.json"
 CURRENT = ROOT / "data" / "source-status" / "current.json"
-CHECKED_AT = "2026-08-03T17:08:28Z"
-COMMIT_SHA = "8d841409dc5fd16fe56b52a8b57c826c07f176a6"
-RUN_URL = "https://github.com/ChelseaKR/permit-pathways/actions/runs/30835371749"
+CHECKED_AT = "2026-08-31T15:12:05Z"
+COMMIT_SHA = "e67094951f97a0f84797a38efc59d9f23c517d9a"
+RUN_URL = "https://github.com/ChelseaKR/permit-bearings/actions/runs/33407059344"
 
 # The one rule whose own citation URL is a city handout rather than a
 # statute, which is exactly the kind of address that gets reorganised away.
@@ -403,7 +403,13 @@ def test_the_harness_reports_a_withdrawn_citation_from_the_adopted_receipt(
     assert f"LINK NOT FOUND: {WITHDRAWN_RULE_ID}" in printed
 
 
-def test_the_harness_says_so_when_no_citation_address_is_gone(monkeypatch, capsys):
+def test_the_harness_names_the_withdrawn_address_in_the_adopted_receipt(
+    monkeypatch, capsys
+):
+    # The adopted receipt now carries the 404 ADR 0005 was written for, so the
+    # harness reports it by rule and by source rather than reporting silence.
+    # It still exits 0: a withdrawn link is a publication fact, not a finding
+    # about the law, and it must not move an exit code.
     from permit_pathways.harness import __main__ as harness_main
 
     monkeypatch.setattr("sys.argv", ["permit_pathways.harness"])
@@ -411,10 +417,13 @@ def test_the_harness_says_so_when_no_citation_address_is_gone(monkeypatch, capsy
     assert harness_main.main() == 0
 
     printed = capsys.readouterr().out
-    assert 'records no cited source whose published address answered "not found"' in (
-        printed
-    )
-    assert "LINK NOT FOUND" not in printed
+    assert 'answered "not found" in the adopted receipt' in printed
+    assert "LINK NOT FOUND" in printed
+    assert WITHDRAWN_RULE_ID in printed
+    assert WITHDRAWN_SOURCE_ID in printed
+    assert "HTTP 404 Not Found" in printed
+    # The retained copy still stands, so nothing may be reported as stale.
+    assert "rules stale:            0" in printed
 
 
 # --------------------------------------------------------------------------
