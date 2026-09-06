@@ -231,7 +231,7 @@ def test_signal_line_reports_real_counts_when_a_fetch_happened(capsys, monkeypat
     from permit_pathways.harness import watch as watch_module
     from permit_pathways.harness.__main__ import main
 
-    def _fake_check_sources(path, *, today):
+    def _fake_check_sources(path, *, today, rules=None):
         return watch_module.WatchResult(
             unchanged=["ca-gov-66321"],
             changed=[],
@@ -263,7 +263,7 @@ def test_signal_line_counts_a_fetched_unverifiable_source(capsys, monkeypatch):
         kind="not_found",
     )
 
-    def _fake_check_sources(path, *, today):
+    def _fake_check_sources(path, *, today, rules=None):
         return watch_module.WatchResult(
             unchanged=["ca-gov-66321"],
             changed=[],
