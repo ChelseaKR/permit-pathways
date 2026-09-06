@@ -63,6 +63,28 @@ published a versioned release.
     `_EXPORT_PROFILE_V2_SHA256` anchor, and the dependent
     `aggregate.artifact_set_fingerprint` and `unverifiable_source_count`.
 
+- The harness stopped reporting a fetch it never made as a clean result. The
+  machine-readable `currency signals:` line printed
+  `changed_sources=0 ... unverifiable_sources=0` on every run, including the
+  ordinary no-network run that `make bundle-check` and any local invocation
+  perform. Those two counts are answers only a download can give, so `0` there
+  was an absence rendered as a measurement — byte-identical to what a watch
+  that ran and found every source current prints. Both now read `not_checked`
+  unless `--fetch` was given.
+  - `stale_rules` and `golden_regressions` are unchanged. They are derived
+    from the committed rule and Golden records, which every run reads, so they
+    are measured whether or not anything was fetched.
+  - Exit codes are untouched. `unverifiable_sources` still counts only this
+    run's fetch failures, so a withdrawn address recorded in the committed
+    receipt still does not move the exit code.
+  - The weekly workflow always runs with `--fetch` and so always saw real
+    numbers, but its alert step read any non-`0` value as "this condition
+    fired" and interpolated it into "N watched source(s) were fetched and
+    their content hash moved". It now refuses a non-numeric signal value and
+    fails the step rather than publishing a sentence built on a token. A
+    report with no signal line at all still falls through to the existing
+    "without a signal breakdown" wording.
+
 - The two source watchers stopped announcing a repository that no longer
   exists. `scripts/pull_hau_letters.py` and
   `src/permit_pathways/harness/watch.py` sent

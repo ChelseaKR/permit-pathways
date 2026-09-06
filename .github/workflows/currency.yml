@@ -92,6 +92,23 @@ jobs:
           changed_sources="$(printf '%s' "$signals" | tr ' ' '\n' | sed -n 's/^changed_sources=//p')"
           stale_rules="$(printf '%s' "$signals" | tr ' ' '\n' | sed -n 's/^stale_rules=//p')"
           golden_regressions="$(printf '%s' "$signals" | tr ' ' '\n' | sed -n 's/^golden_regressions=//p')"
+          # A signal value is either absent — an older harness, or a run that
+          # died before printing, handled by the "no signal breakdown"
+          # fallback below — or a count. Anything else is a value this parser
+          # does not understand, such as the `not_checked` a run that did no
+          # fetching prints for the two counts only a download can answer.
+          # `[ "$v" != "0" ]` would read that word as "this condition fired"
+          # and put it where the body promises a number, so refuse it loudly
+          # instead of reporting a sentence built on a token.
+          for signal_value in "$changed_sources" "$stale_rules" "$golden_regressions"; do
+            case "$signal_value" in
+              "") : ;;
+              *[!0-9]*)
+                echo "::error title=Unparseable currency signal::currency signals carried a non-numeric value: '$signal_value'" >&2
+                exit 1
+                ;;
+            esac
+          done
           # Explicit `if` rather than `[ ... ] && assign`, so `set -e` has
           # nothing subtle to do when a condition did not fire.
           fired=""

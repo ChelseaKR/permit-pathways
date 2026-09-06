@@ -25,6 +25,11 @@ citing it prints a link that resolves to nothing. Neither stales a rule and
 neither changes the exit code: a withdrawn link is a publication fact the
 maintainer may not be able to fix in the same run, so it is reported
 loudly rather than used to break the build.
+
+The machine-readable ``currency signals:`` line reports ``changed_sources``
+and ``unverifiable_sources`` as ``not_checked`` unless ``--fetch`` was given.
+Both are answers only a download can produce, and a run that downloaded
+nothing has not earned the number ``0`` for either.
 """
 
 from __future__ import annotations
@@ -46,6 +51,11 @@ ROOT = Path(__file__).resolve().parents[3]
 EXIT_OK = 0
 EXIT_REVIEW_NEEDED = 1
 EXIT_UNVERIFIABLE = 2
+
+# Printed in the signal line for the two counts only a fetch can answer, on a
+# run that did no fetching. `0` there would be indistinguishable from the
+# clean result of a watch that actually ran.
+NOT_CHECKED = "not_checked"
 
 
 def _validate_snapshot_args(
@@ -313,12 +323,22 @@ def main(argv: list[str] | None = None, *, today: date | None = None) -> int:
     # urgency, and the scheduled workflow could previously only say that one
     # of them happened. A signal that appeared only on failure could not be
     # used to detect recovery either, so it is unconditional. See issue #70.
+    # `changed_sources` and `unverifiable_sources` are answers only a fetch can
+    # give. Without `--fetch` nothing was downloaded, so printing `0` for them
+    # would publish "we checked and found none" for a check that never ran —
+    # byte-identical to what a genuinely clean watch prints, and, since the
+    # committed receipt can itself record a withdrawn address, flatly
+    # contradicted by the report printed above it. They say `not_checked`
+    # instead. `stale_rules` and `golden_regressions` come from the committed
+    # rule and Golden records and are measured on every run, fetch or not.
+    changed_signal = str(len(watch.changed)) if watch is not None else NOT_CHECKED
+    unverifiable_signal = str(len(unverifiable)) if watch is not None else NOT_CHECKED
     print(
         "\ncurrency signals:"
-        f" changed_sources={len(watch.changed) if watch is not None else 0}"
+        f" changed_sources={changed_signal}"
         f" stale_rules={len(report.stale)}"
         f" golden_regressions={len(report.golden_failed)}"
-        f" unverifiable_sources={len(unverifiable)}"
+        f" unverifiable_sources={unverifiable_signal}"
     )
     if unverifiable:
         print(_unverifiable_note(unverifiable))
