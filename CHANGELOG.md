@@ -5,6 +5,42 @@ published a versioned release.
 
 ## [Unreleased]
 
+### Added
+
+- `beta_gate_cli recompute` re-derives the digests that ordinary maintenance
+  moves, so re-pinning them stops being a hand-edit of a tamper-evidence
+  chain. Two routine acts change bytes this repository pins by hash —
+  refreshing the HCD accountability-letter snapshot (#63) and adopting a
+  source-watch receipt (#140) — and both landed on the same four-step chain
+  with no tooling: the v2 export profile's entry digests, the
+  `_EXPORT_PROFILE_V2_SHA256` constant, the record's `artifact_bindings`
+  digests, and the dependent `aggregate.artifact_set_fingerprint` and counts.
+  Doing that by hand has already failed once, in #80: six binding digests were
+  rewritten without recomputing the dependent fingerprint, and the record
+  failed its own self-consistency check.
+  - Every derived value comes back from `load_beta_gate` itself. `recompute`
+    applies the digests it can read from bytes, lets the validator reject the
+    aggregate, and takes the recomputed aggregate verbatim from the rejection,
+    so it cannot re-pin to a value the validator would refuse.
+  - It cannot promote anything. Schema v1's fixed aggregate — `not_run`, zero
+    prepared gates, every stronger-claim boolean false — is what the validator
+    recomputes, and a test asserts a re-pin reproduces it.
+  - It refuses the immutable not-run planning ledgers outright rather than
+    re-pinning them, naming the artifact, and writes nothing in that case.
+    Their independent raw bytes are what stops a favourable nested result
+    being rewritten together with its digest.
+  - It reports `_EXPORT_PROFILE_V2_SHA256` rather than editing it. That
+    constant is the anchor over the export profile and lives in Python source;
+    moving it stays a maintainer attestation with a one-line diff. A refresh
+    is therefore two passes with that attestation in between, which is why the
+    command exits 1 rather than 0 while it is pending.
+  - Export profile membership is never edited — an entry's `raw_sha256` is
+    only ever updated in place — so this cannot add a file to the
+    public/synthetic export or drop one from it. Adding or removing a member
+    still requires a new, separately reviewed profile version.
+  - It refuses to rewrite any file whose committed bytes it cannot reproduce
+    exactly, so a re-pin can never also reformat the file being reviewed.
+
 ### Fixed
 
 - The Bedrock provider default is a model this project's AWS account can
