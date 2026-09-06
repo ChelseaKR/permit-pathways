@@ -34,8 +34,9 @@ published a versioned release.
     verbatim in the retained copy first. Everything else is `not_checkable`,
     carrying which of the two it was. Measured over the committed corpus that
     is 7 trackable and 37 not, with zero rules reported lost against a
-    document that had not changed; without those two rules it would have been
-    25 false losses on the first real source change.
+    document that had not changed. Without those two rules the same corpus
+    reported 36 losses against documents that had not changed at all, which
+    is what the first real source change would have printed.
   - A source that could not be read reports `not_checkable` for every rule
     that cites it, carrying the reason, and may report nothing else. Both the
     Python loader and the browser bundle check refuse a receipt that claims

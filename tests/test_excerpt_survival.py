@@ -603,10 +603,10 @@ def test_no_committed_rule_is_reported_lost_against_an_unchanged_document():
        never in that PDF — they quote statutes.
     2. This project's excerpts are curated citations, not raw quotations:
        several carry editorial brackets condensing a list, so they do not
-       occur verbatim even now. Twelve rules reported `excerpt_lost` against
-       their own unchanged retained copy.
+       occur verbatim even now.
 
-    Either would have made the first real source change produce a page of
+    Together they reported 36 losses across this corpus with nothing changed.
+    That is what the first real source change would have printed: a page of
     findings nobody could act on, which is worse than no signal at all.
     """
 
