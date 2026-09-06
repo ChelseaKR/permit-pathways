@@ -91,7 +91,7 @@
     {
       "artifact_id": "source_state",
       "path": "data/source-status/current.json",
-      "sha256": "sha256:4a95957be45dddef306bb4f648e0491251124fb4c0ba1b492deee8b08445893a"
+      "sha256": "sha256:50e16b38940b7d833eebfebec57d7f178e8fd22b505b2ae036a46539e1dbefab"
     }
   ],
   "derived_gates": [
@@ -215,7 +215,7 @@
     "prepared_gate_count": 0,
     "not_run_gate_count": 14,
     "changed_source_count": 0,
-    "unverifiable_source_count": 0,
+    "unverifiable_source_count": 1,
     "stale_rule_count": 0,
     "unverified_rule_count": 0,
     "reference_currency_blocker_ids": [],
@@ -235,7 +235,7 @@
       "problem_evidence",
       "review_levels"
     ],
-    "artifact_set_fingerprint": "sha256:1d50634b5083b5b86476dd169963065614187ef8da41f0e334fe1a08c3130be4",
+    "artifact_set_fingerprint": "sha256:8b80f0e8e1fb2bcf58218a9fa2fd5ed1a6116c3dc8a7698210b91e98c7e30a73",
     "supports_tested_beta_claim": false,
     "supports_statewide_beta_claim": false,
     "supports_human_review_claim": false,

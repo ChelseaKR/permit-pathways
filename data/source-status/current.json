@@ -2,7 +2,7 @@
   "affected_golden_case_ids": [],
   "affected_rule_ids": [],
   "changed_source_ids": [],
-  "checked_at": "2026-08-03T17:08:28Z",
+  "checked_at": "2026-08-31T15:12:05Z",
   "observations": [
     {
       "last_verified_on": "2026-07-27",
@@ -102,11 +102,12 @@
     },
     {
       "last_verified_on": "2026-07-30",
-      "observed_sha256": "f8b63d11646edc778e710bc1431f37919c64b1945d52c496d48aa985f41f9a5b",
-      "reason": null,
+      "observed_sha256": null,
+      "reason": "HTTP 404 Not Found",
       "recorded_sha256": "f8b63d11646edc778e710bc1431f37919c64b1945d52c496d48aa985f41f9a5b",
       "source_id": "davis-adu-handout-2026",
-      "status": "unchanged"
+      "status": "unverifiable",
+      "unverifiable_kind": "not_found"
     },
     {
       "last_verified_on": "2026-07-27",
@@ -158,13 +159,13 @@
     }
   ],
   "receipt": {
-    "commit_sha": "8d841409dc5fd16fe56b52a8b57c826c07f176a6",
-    "method": "github_actions_scheduled_watch",
-    "run_url": "https://github.com/ChelseaKR/permit-pathways/actions/runs/30835371749",
+    "commit_sha": "e67094951f97a0f84797a38efc59d9f23c517d9a",
+    "method": "github_actions_source_currency_watch",
+    "run_url": "https://github.com/ChelseaKR/permit-bearings/actions/runs/33407059344",
     "status": "reviewed"
   },
   "schema_version": 1,
-  "snapshot_id": "source-watch-2026-08-03-run-30835371749",
+  "snapshot_id": "source-watch-33407059344-1",
   "source_registry_sha256": "8cb44c50a79e1e42d73335284e6b2c7b9b72f884b2745552d6cc85b93a0ee472",
   "unaffected_golden_case_ids": [
     "adu-conversion-only",
@@ -218,5 +219,7 @@
     "sb9-urban-lot-split",
     "woodland-adu-ordinance-2026"
   ],
-  "unverifiable_source_ids": []
+  "unverifiable_source_ids": [
+    "davis-adu-handout-2026"
+  ]
 }

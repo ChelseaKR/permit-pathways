@@ -298,7 +298,16 @@ unverifiableObservation.status = "unverifiable";
 unverifiableObservation.observed_sha256 = null;
 unverifiableObservation.reason = "HTTP 403 Forbidden";
 unverifiableObservation.unverifiable_kind = "transport";
-unverifiable.unverifiable_source_ids = ["ca-gov-66317"];
+// The committed receipt already carries one withdrawn address of its own
+// (ADR 0005), so this fixture adds a second unverifiable source rather than
+// replacing the set. Replacing it leaves an observation whose status is not
+// listed, which the validator rejects — correctly, but for the wrong reason.
+unverifiable.unverifiable_source_ids = [
+  ...new Set([
+    ...bundle.source_state.unverifiable_source_ids,
+    "ca-gov-66317",
+  ]),
+].sort();
 setImpact(unverifiable, []);
 const normalizedUnverifiable = normalize(unverifiable);
 check(normalizedUnverifiable !== null, "valid unverifiable receipt rejected");

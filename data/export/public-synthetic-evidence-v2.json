@@ -190,7 +190,7 @@
     {
       "path": "data/demo-data.js",
       "role": "derived_browser_bundle",
-      "raw_sha256": "sha256:e7ed5a9871f527db0fb22c8049d6aff0b5f736891bbfcc005e6c91fd9ade617c"
+      "raw_sha256": "sha256:370744ff92d421d1f57ffab707bae5464f515879ba86db3f0c9ba24bfd3ea29a"
     },
     {
       "path": "data/explanations/plain-language.json",
@@ -276,7 +276,7 @@
     {
       "path": "data/source-status/current.json",
       "role": "source_state_receipt",
-      "raw_sha256": "sha256:4a95957be45dddef306bb4f648e0491251124fb4c0ba1b492deee8b08445893a"
+      "raw_sha256": "sha256:50e16b38940b7d833eebfebec57d7f178e8fd22b505b2ae036a46539e1dbefab"
     },
     {
       "path": "data/sources.json",

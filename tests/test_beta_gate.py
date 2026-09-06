@@ -4,7 +4,7 @@ import hashlib
 import json
 import shutil
 from copy import deepcopy
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,10 @@ from permit_pathways.beta_gate_cli import main
 
 ROOT = Path(__file__).resolve().parents[1]
 RECORD = ROOT / DEFAULT_RECORD_PATH
-TODAY = date(2026, 8, 9)
+# Must not precede the adopted receipt's `checked_at`: the gate refuses a
+# source-state date in its own future, so this fixture tracks the committed
+# receipt (2026-08-31) rather than the day the fixture was first written.
+TODAY = date(2026, 8, 31)
 
 
 def _payload() -> dict[str, Any]:
@@ -168,6 +171,7 @@ def _source_state_variant(
     gate: dict[str, Any],
     *,
     status: str,
+    extra_unverifiable_source_ids: tuple[str, ...] = (),
 ) -> None:
     binding = _binding(gate, "source_state")
     path = repository / binding["path"]
@@ -183,15 +187,34 @@ def _source_state_variant(
         observation["status"] = "changed"
         observation["observed_sha256"] = "a" * 64
         observation["reason"] = None
+        # This source is withdrawn in the committed receipt, so it arrives
+        # carrying `unverifiable_kind`. A fetched observation may not have one,
+        # and the loader rejects it, so drop it when synthesising a fetch.
+        observation.pop("unverifiable_kind", None)
         state["changed_source_ids"] = [source_id]
-        state["unverifiable_source_ids"] = []
+        unverifiable_ids = set()
     else:
         observation["status"] = "unverifiable"
         observation["observed_sha256"] = None
         observation["reason"] = "controlled network failure"
         observation["unverifiable_kind"] = "transport"
         state["changed_source_ids"] = []
-        state["unverifiable_source_ids"] = [source_id]
+        unverifiable_ids = {source_id}
+
+    # Sources the caller wants unverifiable as well. The committed receipt
+    # already carries one withdrawn address, so a fixture that needs the
+    # derived count to MOVE has to name a second one; reusing the committed
+    # one leaves the count where it started and quietly empties the test.
+    for extra_id in extra_unverifiable_source_ids:
+        extra = next(
+            item for item in state["observations"] if item["source_id"] == extra_id
+        )
+        extra["status"] = "unverifiable"
+        extra["observed_sha256"] = None
+        extra["reason"] = "controlled network failure"
+        extra["unverifiable_kind"] = "transport"
+        unverifiable_ids.add(extra_id)
+    state["unverifiable_source_ids"] = sorted(unverifiable_ids)
 
     rules = [
         record
@@ -247,7 +270,10 @@ def test_committed_gate_recomputes_prepared_not_run_state() -> None:
     assert summary.stale_rule_count == 0
     assert summary.unverified_rule_count == 0
     assert summary.changed_source_count == 0
-    assert summary.unverifiable_source_count == 0
+    # The adopted receipt carries one withdrawn address (ADR 0005). It counts
+    # as unverifiable and stales nothing, so the rule counts above are
+    # unchanged and the gate stays `not_run` for its own reasons.
+    assert summary.unverifiable_source_count == 1
     assert summary.reference_currency_blocker_ids == ()
     assert summary.blocking_gate_ids == tuple(sorted(summary.blocking_gate_ids))
 
@@ -973,7 +999,9 @@ def test_valid_populated_source_state_arrays_are_semantically_validated(
 
 def test_future_prepared_date_is_rejected(tmp_path: Path) -> None:
     payload = _payload()
-    payload["prepared_on"] = "2026-08-10"
+    # Relative to TODAY so this cannot silently stop testing anything the
+    # next time the fixture date moves with an adopted receipt.
+    payload["prepared_on"] = (TODAY + timedelta(days=1)).isoformat()
     with pytest.raises(ValueError, match="future"):
         load_beta_gate(
             _write_record(tmp_path, payload),
@@ -1211,7 +1239,15 @@ def _stale_receipt_repository(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     repository = _repository(tmp_path)
     committed = (repository / DEFAULT_RECORD_PATH).read_bytes()
     gate = _payload()
-    _source_state_variant(repository, gate, status="unverifiable")
+    # The committed receipt already reports `davis-adu-handout-2026` as
+    # unverifiable, so a second withdrawn address is what makes this a state
+    # the committed pins have not caught up with.
+    _source_state_variant(
+        repository,
+        gate,
+        status="unverifiable",
+        extra_unverifiable_source_ids=("hcd-davis-adu-ta-2025",),
+    )
     # Undo the helper's hand re-pinning: the point is the stale record.
     (repository / DEFAULT_RECORD_PATH).write_bytes(committed)
     return repository, gate
@@ -1338,7 +1374,9 @@ def test_recompute_takes_the_aggregate_from_the_validator_not_from_hand(
     summary = load_beta_gate(
         repository / DEFAULT_RECORD_PATH, repository_root=repository, today=TODAY
     )
-    assert summary.unverifiable_source_count == 1
+    # Both withdrawn addresses: the one the committed receipt already carried
+    # and the one this fixture added. The count is re-derived, not copied.
+    assert summary.unverifiable_source_count == 2
     assert summary.beta_status == "not_run"
     assert summary.record_status == "prepared"
 
