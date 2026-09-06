@@ -1,4 +1,5 @@
 import zipfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -78,13 +79,25 @@ FILES = {
 }
 
 
-@pytest.fixture()
-def stops(tmp_path):
-    path = tmp_path / "feed.zip"
+#: A Monday inside the fixture calendar's 20260101-20261231 weekday range.
+FIXTURE_SERVICE_DATE = date(2026, 6, 15)
+
+
+def _write_feed(path, files):
     with zipfile.ZipFile(path, "w") as z:
-        for name, content in FILES.items():
+        for name, content in files.items():
             z.writestr(name, content)
-    return load_feed(path)
+    return path
+
+
+@pytest.fixture()
+def feed_path(tmp_path):
+    return _write_feed(tmp_path / "feed.zip", FILES)
+
+
+@pytest.fixture()
+def stops(feed_path):
+    return load_feed(feed_path, as_of=FIXTURE_SERVICE_DATE).stops
 
 
 def test_headway_classification(stops):
@@ -340,3 +353,362 @@ def test_a_planned_and_an_existing_row_at_one_point_both_survive_loading():
         "major_stop_rail_single_operator",
         "mpo_rtp_planned_major_stop",
     ]
+
+
+# --- Service dates (issue #132) -----------------------------------------
+#
+# Both screens turn on service that operates on a day, so a headway is a fact
+# about a date. The previous implementation read `calendar.txt` alone, kept
+# whichever service_id had the most trips, and never opened `feed_info.txt` or
+# `calendar_dates.txt` -- so a summer session, a holiday, and a feed that
+# expired years ago all produced a number, and which number depended on which
+# service period happened to be larger. These tests pin the four states in
+# which no number is produced, and the two in which one is.
+
+CALENDAR_TWO_SEASONS = (
+    "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,"
+    "start_date,end_date\n"
+    # A big spring weekday service that ended, and a small summer one that
+    # runs on the date under test. "Busiest" picks the wrong one.
+    "SPRING,1,1,1,1,1,0,0,20260101,20260531\n"
+    "SUMMER,1,1,1,1,1,0,0,20260601,20260831\n"
+    "WEEKEND,0,0,0,0,0,1,1,20260101,20261231\n"
+)
+
+
+def _peak_times(count, step):
+    """`count` trips every `step` minutes from 06:00 and again from 16:00."""
+    rows = []
+    for index in range(count):
+        for base in (6, 16):
+            minute = index * step
+            rows.append(f"{base + minute // 60:02d}:{minute % 60:02d}:00")
+    return rows
+
+
+def _seasonal_feed(files_extra=None):
+    trips = []
+    stop_times = []
+    for service, step, count in (
+        ("SPRING", 10, 19),
+        ("SUMMER", 15, 13),
+        ("WEEKEND", 60, 4),
+    ):
+        for index, hms in enumerate(_peak_times(count, step)):
+            trip_id = f"{service}{index}"
+            trips.append(f"R1,{service},{trip_id},0\n")
+            stop_times.append(f"{trip_id},{hms},{hms},S1,1\n")
+    files = {
+        "stops.txt": "stop_id,stop_name,stop_lat,stop_lon\nS1,Depot,38.5450,-121.7400\n",
+        "routes.txt": "route_id,route_short_name,route_type\nR1,1,3\n",
+        "calendar.txt": CALENDAR_TWO_SEASONS,
+        "trips.txt": "route_id,service_id,trip_id,direction_id\n" + "".join(trips),
+        "stop_times.txt": (
+            "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n"
+            + "".join(stop_times)
+        ),
+    }
+    files.update(files_extra or {})
+    return files
+
+
+def test_without_a_service_date_no_headway_is_produced(feed_path):
+    # The defect in its plainest form: asked nothing about a day, the loader
+    # used to answer with the busiest service's headways anyway.
+    screen = load_feed(feed_path)
+    assert screen.calendar.status == "no_as_of"
+    assert all(stop.route_max_gaps == {} for stop in screen.stops)
+    assert not screen.calendar.headways_measurable
+
+
+def test_without_a_service_date_the_screen_is_unknown_not_no(feed_path):
+    screen = load_feed(feed_path)
+    determination = determine(
+        38.5452, -121.7401, screen.stops, calendar=screen.calendar
+    )
+    assert determination.height_18ft == "unknown"
+    assert determination.parking_exemption == "unknown"
+    summary = determination.summary()
+    assert "UNKNOWN" in summary
+    assert "no service date was supplied" in summary
+
+
+def test_a_stated_date_still_produces_the_candidates_it_always_did(stops):
+    # The complement of the four withholding tests. If the only thing this
+    # change did were report `unknown` everywhere, every test above would pass
+    # and the module would be useless. On a date the feed covers, the answer is
+    # the same one the module gave before.
+    determination = determine(38.5452, -121.7401, stops)
+    assert determination.parking_exemption == "candidate"
+    assert determination.height_18ft == "candidate"
+    assert any(stop.route_max_gaps for stop in stops)
+
+
+def test_a_date_outside_the_feeds_own_validity_window_is_unknown(tmp_path):
+    files = _seasonal_feed(
+        {
+            "feed_info.txt": (
+                "feed_publisher_name,feed_publisher_url,feed_lang,"
+                "feed_start_date,feed_end_date\n"
+                "Test,http://example.invalid,en,20260601,20260831\n"
+            )
+        }
+    )
+    path = _write_feed(tmp_path / "expired.zip", files)
+    # Inside `calendar.txt`'s WEEKEND range, outside what the feed publishes
+    # about itself. An expired feed used to screen exactly like a current one.
+    screen = load_feed(path, as_of=date(2026, 12, 5))
+    assert screen.calendar.status == "outside_feed_window"
+    assert screen.calendar.feed_valid_from == "2026-06-01"
+    assert screen.calendar.feed_valid_to == "2026-08-31"
+    assert all(stop.route_max_gaps == {} for stop in screen.stops)
+    determination = determine(
+        38.5450, -121.7400, screen.stops, calendar=screen.calendar
+    )
+    assert determination.parking_exemption == "unknown"
+    assert determination.height_18ft == "unknown"
+    summary = determination.summary()
+    assert "2026-06-01 to 2026-08-31" in summary
+    assert "CANDIDATE" not in summary
+
+
+def test_a_feed_with_no_calendar_files_is_unknown_rather_than_a_negative(tmp_path):
+    files = _seasonal_feed()
+    del files["calendar.txt"]
+    path = _write_feed(tmp_path / "nocal.zip", files)
+    screen = load_feed(path, as_of=date(2026, 6, 15))
+    assert screen.calendar.status == "no_calendar"
+    assert screen.calendar.calendar_source == "none"
+    determination = determine(
+        38.5450, -121.7400, screen.stops, calendar=screen.calendar
+    )
+    assert determination.height_18ft == "unknown"
+    assert "neither calendar.txt nor calendar_dates.txt" in determination.summary()
+
+
+def test_a_feed_defined_only_by_calendar_dates_still_resolves(tmp_path):
+    files = _seasonal_feed()
+    del files["calendar.txt"]
+    files["calendar_dates.txt"] = "service_id,date,exception_type\nSUMMER,20260615,1\n"
+    path = _write_feed(tmp_path / "datesonly.zip", files)
+    screen = load_feed(path, as_of=date(2026, 6, 15))
+    assert screen.calendar.status == "resolved"
+    assert screen.calendar.calendar_source == "calendar_dates"
+    assert screen.calendar.service_ids_active == ("SUMMER",)
+    assert screen.stops[0].route_max_gaps["R1"] <= 15
+
+
+def test_weekday_and_weekend_dates_give_different_headways(tmp_path):
+    path = _write_feed(tmp_path / "seasonal.zip", _seasonal_feed())
+    weekday = load_feed(path, as_of=date(2026, 6, 15))  # a Monday
+    weekend = load_feed(path, as_of=date(2026, 6, 20))  # the Saturday after
+    assert weekday.calendar.service_ids_active == ("SUMMER",)
+    assert weekend.calendar.service_ids_active == ("WEEKEND",)
+    assert weekday.stops[0].route_max_gaps != weekend.stops[0].route_max_gaps
+    assert weekday.stops[0].hqtc_routes() == ["R1"]
+    assert weekend.stops[0].hqtc_routes() == []
+
+
+def test_an_expired_service_period_is_not_measured_because_it_is_bigger(tmp_path):
+    # SPRING has the most trips and the best headways, and ended on 2026-05-31.
+    # Selecting the busiest service picked it for every date in the feed.
+    path = _write_feed(tmp_path / "seasonal.zip", _seasonal_feed())
+    screen = load_feed(path, as_of=date(2026, 6, 15))
+    assert "SPRING" not in screen.calendar.service_ids_active
+    assert screen.stops[0].route_max_gaps["R1"] == 15  # SUMMER's, not SPRING's
+
+
+def test_every_service_active_on_the_date_is_measured(tmp_path):
+    # A supplemental service sharing a weekday with the base schedule used to
+    # be dropped whole, because only the single busiest service_id was kept.
+    files = _seasonal_feed()
+    files["calendar.txt"] += "SUPPLEMENT,1,1,1,1,1,0,0,20260601,20260831\n"
+    files["trips.txt"] += "R2,SUPPLEMENT,SUP0,0\nR2,SUPPLEMENT,SUP1,0\n"
+    files["routes.txt"] += "R2,2,3\n"
+    files["stop_times.txt"] += (
+        "SUP0,07:00:00,07:00:00,S1,1\nSUP1,17:00:00,17:00:00,S1,1\n"
+    )
+    path = _write_feed(tmp_path / "supplement.zip", files)
+    screen = load_feed(path, as_of=date(2026, 6, 15))
+    assert screen.calendar.service_ids_active == ("SUMMER", "SUPPLEMENT")
+    assert set(screen.stops[0].bus_routes) == {"R1", "R2"}
+
+
+def test_an_exception_removing_every_service_states_itself_and_finds_nothing(tmp_path):
+    files = _seasonal_feed(
+        {"calendar_dates.txt": "service_id,date,exception_type\nSUMMER,20260615,2\n"}
+    )
+    path = _write_feed(tmp_path / "holiday.zip", files)
+    screen = load_feed(path, as_of=date(2026, 6, 15))
+    assert screen.calendar.status == "no_service_on_date"
+    assert screen.calendar.service_ids_removed_by_exception == ("SUMMER",)
+    determination = determine(
+        38.5450, -121.7400, screen.stops, calendar=screen.calendar
+    )
+    # The feed answered, so this is a negative it supports -- not `unknown`.
+    assert determination.height_18ft == "no"
+    assert determination.qualifying_stops == []
+    summary = determination.summary()
+    assert "no service runs on 2026-06-15" in summary
+    assert "removes service SUMMER" in summary
+
+
+def test_an_exception_adding_service_on_an_excluded_day_is_honoured(tmp_path):
+    files = _seasonal_feed(
+        {"calendar_dates.txt": "service_id,date,exception_type\nSUMMER,20260620,1\n"}
+    )
+    path = _write_feed(tmp_path / "added.zip", files)
+    saturday = load_feed(path, as_of=date(2026, 6, 20))
+    assert saturday.calendar.service_ids_active == ("SUMMER", "WEEKEND")
+    assert saturday.calendar.service_ids_added_by_exception == ("SUMMER",)
+
+
+def test_the_statewide_dataset_still_answers_when_the_feed_calendar_does_not(tmp_path):
+    # The statewide dataset carries its own currency and is not scoped by this
+    # feed's calendar, so an unreadable feed must not suppress a candidate that
+    # never depended on it.
+    path = _write_feed(tmp_path / "seasonal.zip", _seasonal_feed())
+    screen = load_feed(path)  # no as-of
+    determination = determine(
+        38.5449,
+        -121.7405,
+        screen.stops,
+        hq_stops=[EXISTING_RAIL_STOP],
+        calendar=screen.calendar,
+    )
+    assert determination.height_18ft == "candidate"
+    assert determination.parking_exemption == "candidate"
+    assert "Caltrans HQ Transit Stops dataset" in determination.qualifying_stops[0][2]
+
+
+# --- The committed Unitrans feed ---------------------------------------
+
+UNITRANS = Path(__file__).parent.parent / "corpus" / "gtfs" / "unitrans.zip"
+DAVIS_SITE = (38.5449, -121.7442)
+
+
+def test_unitrans_summer_weekday_and_sunday_name_different_service():
+    weekday = load_feed(UNITRANS, as_of=date(2026, 8, 4))  # a Tuesday
+    sunday = load_feed(UNITRANS, as_of=date(2026, 8, 9))
+    assert weekday.calendar.status == "resolved"
+    assert sunday.calendar.status == "resolved"
+    assert weekday.calendar.service_ids_active != sunday.calendar.service_ids_active
+    weekday_gaps = {
+        s.stop_id: s.route_max_gaps for s in weekday.stops if s.route_max_gaps
+    }
+    sunday_gaps = {
+        s.stop_id: s.route_max_gaps for s in sunday.stops if s.route_max_gaps
+    }
+    assert weekday_gaps != sunday_gaps
+
+
+def test_unitrans_measures_real_service_on_a_date_inside_its_window():
+    # The complement over the real corpus: a change that only ever reported
+    # `unknown` would satisfy every withholding test above. It does not.
+    screen = load_feed(UNITRANS, as_of=date(2026, 8, 4))
+    assert screen.calendar.service_ids_active == ("71",)
+    assert screen.calendar.feed_valid_from == "2026-07-20"
+    assert screen.calendar.feed_valid_to == "2026-09-22"
+    measured = {r for stop in screen.stops for r in stop.route_max_gaps}
+    assert len(measured) > 10
+
+
+def test_unitrans_finding_is_unchanged_once_the_date_is_stated():
+    # The README's finding is that no *local bus* stop meets the encoded peak
+    # screens and the statewide dataset supplies the Amtrak candidate. Naming a
+    # date must not quietly change what the repository claims.
+    from permit_pathways.transit import load_hq_stops
+
+    screen = load_feed(UNITRANS, as_of=date(2026, 8, 4))
+    assert not [s for s in screen.stops if s.hqtc_routes()]
+    assert not [s for s in screen.stops if s.major_candidate_routes()]
+    hq = load_hq_stops(
+        Path(__file__).parent.parent / "corpus" / "transit" / "ca-hq-transit-stops.json"
+    )
+    determination = determine(
+        *DAVIS_SITE, screen.stops, hq_stops=hq, calendar=screen.calendar
+    )
+    assert determination.height_18ft == "candidate"
+    assert "major_stop_rail" in determination.qualifying_stops[0][2]
+
+
+def test_unitrans_labor_day_monday_runs_the_sunday_service_the_exception_names():
+    # 2026-09-07 is a Monday. `calendar.txt` puts service 71 on Mondays;
+    # `calendar_dates.txt` removes 71 and adds 79, the weekend service. A
+    # reader of `calendar.txt` alone measures a schedule that does not run.
+    holiday = load_feed(UNITRANS, as_of=date(2026, 9, 7))
+    ordinary_monday = load_feed(UNITRANS, as_of=date(2026, 8, 31))
+    assert ordinary_monday.calendar.service_ids_active == ("71",)
+    assert holiday.calendar.service_ids_active == ("79",)
+    assert holiday.calendar.service_ids_removed_by_exception == ("71",)
+    assert holiday.calendar.service_ids_added_by_exception == ("79",)
+
+
+def test_unitrans_outside_its_published_window_is_unknown_not_a_negative():
+    screen = load_feed(UNITRANS, as_of=date(2026, 10, 1))
+    assert screen.calendar.status == "outside_feed_window"
+    determination = determine(*DAVIS_SITE, screen.stops, calendar=screen.calendar)
+    assert determination.height_18ft == "unknown"
+    assert determination.parking_exemption == "unknown"
+    assert "outside the validity window" in determination.summary()
+
+
+@pytest.mark.parametrize(
+    ("as_of", "files", "expected_status"),
+    [
+        (None, _seasonal_feed(), "no_as_of"),
+        (date(2026, 12, 5), None, "outside_feed_window"),
+        (date(2026, 6, 15), "no-calendar", "no_calendar"),
+    ],
+)
+def test_an_unresolved_calendar_names_no_active_service(
+    tmp_path, as_of, files, expected_status
+):
+    # The real invariant behind the headway skip in `load_feed`: a state that
+    # is not `resolved` must never carry service ids. If it did, a caller that
+    # measures over `service_ids_active` -- or a future refactor that drops the
+    # skip as redundant -- would measure a schedule nobody vouched for.
+    if files is None:
+        files = _seasonal_feed(
+            {
+                "feed_info.txt": (
+                    "feed_publisher_name,feed_publisher_url,feed_lang,"
+                    "feed_start_date,feed_end_date\n"
+                    "Test,http://example.invalid,en,20260601,20260831\n"
+                )
+            }
+        )
+    elif files == "no-calendar":
+        files = _seasonal_feed()
+        del files["calendar.txt"]
+    path = _write_feed(tmp_path / f"{expected_status}.zip", files)
+    screen = load_feed(path, as_of=as_of)
+    assert screen.calendar.status == expected_status
+    assert screen.calendar.service_ids_active == ()
+    assert not screen.calendar.headways_measurable
+
+
+def test_a_feed_without_frequencies_does_not_claim_headway_defined_trips(tmp_path):
+    # `frequencies.txt` is not expanded, so its presence is disclosed rather
+    # than silently measured around. A missing file and an empty one are
+    # different facts and must not collapse into "present".
+    plain = _write_feed(tmp_path / "plain.zip", _seasonal_feed())
+    assert (
+        load_feed(plain, as_of=date(2026, 6, 15)).calendar.frequency_based_trips
+        is False
+    )
+
+    with_frequencies = _write_feed(
+        tmp_path / "freq.zip",
+        _seasonal_feed(
+            {
+                "frequencies.txt": (
+                    "trip_id,start_time,end_time,headway_secs\n"
+                    "SUMMER0,06:00:00,09:00:00,600\n"
+                )
+            }
+        ),
+    )
+    resolved = load_feed(with_frequencies, as_of=date(2026, 6, 15)).calendar
+    assert resolved.frequency_based_trips is True
+    assert "frequencies.txt" in resolved.reason()

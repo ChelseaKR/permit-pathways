@@ -153,7 +153,8 @@ make verify                                        # locked Python quality/secur
 npm ci && npx playwright install chromium          # one-time browser test setup
 npm run test:a11y                                  # axe, reflow, and journey-state checks
 npm run test:perf                                  # Lighthouse category budgets
-PYTHONPATH=src python3 -m permit_pathways.transit --gtfs corpus/gtfs/unitrans.zip --lat 38.5449 --lon -121.7442
+PYTHONPATH=src python3 -m permit_pathways.transit --gtfs corpus/gtfs/unitrans.zip \
+  --lat 38.5449 --lon -121.7442 --as-of 2026-08-04   # --as-of is required for any headway
 PYTHONPATH=src python3 -m permit_pathways.conformance <ordinance.txt>  # scan
 python3 scripts/scan_ordinances.py --check         # published scan results vs. checks.json
 PYTHONPATH=src python3 -m permit_pathways.conformance_evaluation_cli validate-plan
@@ -714,12 +715,43 @@ stops into intersections, and returns screening results over the supplied
 datasets. Straight-line distance can eliminate a supplied stop, but it cannot
 establish that every relevant operator, stop, or service record is present.
 
-Run against the bundled summer Unitrans (Davis) feed, no local bus stops meet
-the encoded ≤15/≤20-minute peak screens. The separate statewide high-quality
-transit dataset supplies the Davis Amtrak major-stop candidate near the depot.
-That disagreement is the useful finding: a local feed alone is incomplete,
-and schedule dates, multiple operators, and walking distance all need
-explicit confirmation before applicant-facing use.
+Run against the bundled summer Unitrans (Davis) feed on 2026-08-04, no local
+bus stops meet the encoded ≤15/≤20-minute peak screens. The separate statewide
+high-quality transit dataset supplies the Davis Amtrak major-stop candidate
+near the depot. That disagreement is the useful finding: a local feed alone is
+incomplete, and multiple operators and walking distance still need explicit
+confirmation before applicant-facing use.
+
+**A headway is a fact about a date.** `--as-of` is required for any headway
+conclusion, and there is deliberately no default to today, so a recorded run
+stays reproducible. Only the services `calendar.txt` and `calendar_dates.txt`
+put on that date are measured, and the date is checked against the validity
+window in `feed_info.txt`. The bundled Unitrans feed makes the difference
+concrete: it declares itself valid 2026-07-20 to 2026-09-22 and ships two
+disjoint session calendars, so 2026-08-04 measures service `71` across
+sixteen routes and 2026-08-09 measures service `79` across two, while
+2026-09-07 — a Monday — runs `79` because `calendar_dates.txt` removes `71`
+and adds `79` for Labor Day.
+
+Before this, `transit.py` read `calendar.txt` alone, kept whichever
+`service_id` had the most trips, and never opened `feed_info.txt` or
+`calendar_dates.txt`. A summer session, a holiday, and a feed that expired
+years ago all produced a headway, and which headway depended on which of the
+feed's service periods happened to be larger. Four states now withhold rather
+than answer, and each reports `unknown` — never "no qualifying stop", because
+a feed that could not be read has not found an absence:
+
+| state | meaning |
+| --- | --- |
+| `no_as_of` | no service date was supplied |
+| `outside_feed_window` | the date falls outside the feed's own validity window |
+| `no_calendar` | the feed ships neither calendar file |
+| `no_service_on_date` | the calendar is readable and says nothing runs — the one negative a feed *can* support |
+
+A candidate resting on the statewide Caltrans dataset is unaffected, because
+that dataset carries its own currency and is not scoped by a local feed's
+calendar. `frequencies.txt` is not expanded; a feed that ships one is
+reported as such rather than measured around.
 
 **A planned stop is not an existing one.** The statewide Caltrans dataset
 carries an `hqta_details` column that separates a stop derived from published

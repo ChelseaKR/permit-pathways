@@ -7,6 +7,43 @@ published a versioned release.
 
 ### Added
 
+- **The transit screen is calendar-aware.** `transit.py` takes `--as-of DATE`
+  and measures peak headways only over the services `calendar.txt` and
+  `calendar_dates.txt` say run on that date, after checking the date against
+  the validity window `feed_info.txt` publishes. The result carries
+  `service_date`, `service_ids_active`, `feed_valid_from`, `feed_valid_to`,
+  `calendar_source`, and the service ids any exception added or removed
+  (issue #132).
+  - **What it stops.** The previous implementation read `calendar.txt` alone,
+    kept whichever `service_id` had the most trips, and never opened
+    `feed_info.txt` or `calendar_dates.txt`. A summer session, a holiday, and
+    a feed that expired years ago all produced a headway, and which headway
+    you got depended on which of the feed's service periods happened to be
+    larger. That is a measurement standing in for one nobody made.
+  - **Four states withhold instead of answering**, and each reports `unknown`
+    rather than "no qualifying stop": `no_as_of`, `outside_feed_window`,
+    `no_calendar`, and — the one negative a feed *can* support —
+    `no_service_on_date`, which is the calendar saying nothing runs. There is
+    deliberately no default to today, so a recorded run stays reproducible.
+  - A candidate resting on the statewide Caltrans dataset is unaffected: that
+    dataset carries its own currency and is not scoped by a local feed's
+    calendar, so an unreadable feed suppresses nothing that never depended on
+    it.
+  - Every service active on the date is now measured, not just the busiest
+    one, so a supplemental schedule sharing a weekday with a base schedule is
+    no longer dropped whole.
+  - `frequencies.txt` is still not expanded; a feed that ships one now says so
+    instead of being measured around.
+  - Over the committed Unitrans feed this is visible rather than theoretical:
+    the feed declares itself valid 2026-07-20 to 2026-09-22 and ships two
+    disjoint session calendars, so 2026-08-04 measures service `71` across
+    sixteen routes and 2026-08-09 measures service `79` across two, while
+    2026-09-07 — a Monday — runs `79` because `calendar_dates.txt` removes
+    `71` and adds `79`. The repository's published finding is unchanged: no
+    local bus stop meets the encoded ≤15/≤20-minute peak screens on any of
+    those dates, and the Amtrak candidate still comes from the statewide
+    dataset.
+
 - The source watch now reports, per rule, whether the text that rule quotes
   still occurs in a source whose content hash moved. A changed hash stales
   every dependent rule, which is correct and deliberately coarse: a footer

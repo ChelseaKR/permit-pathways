@@ -161,8 +161,14 @@ These are implementation defects or evidence gaps, not general roadmap ideas:
    derived from published service, counts neither the planned row toward a
    candidate nor toward public transit near the site, and reports every
    planned row inside the radius with a question for the transit agency
-   (ADR 0006). The others still need correction before applicant-facing
-   eligibility use.
+   (ADR 0006). Service-calendar exceptions are the second instance and are
+   now handled: `transit.py` takes `--as-of DATE`, measures headways only
+   over the services `calendar.txt` and `calendar_dates.txt` say run on that
+   date, checks the date against `feed_info.txt`'s validity window, and
+   reports `unknown` — never `no` — when no date was supplied, the date falls
+   outside the window, or the feed ships no calendar (issue #132). Multi-
+   operator feed completeness and walking-network confirmation still need
+   correction before applicant-facing eligibility use.
 6. **Local records are not applicant-ready layers.** The bounded Davis record
    has dated evidence for three City-published processing categories, but it
    does not establish the operative ordinance, resolve HCD's October 2025

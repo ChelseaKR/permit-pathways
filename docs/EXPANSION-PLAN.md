@@ -87,10 +87,18 @@ states something false about the physical world, because
 example of transit overstating certainty, and because it is fully closable
 offline against committed data.
 
-**Remaining in this class, not built:** the other three corrections risk 5
-names. Service effective dates and calendar exceptions, multi-operator feed
-completeness, and walking-network confirmation. Each needs either a routing
-dependency or a feed-currency model that this phase deliberately did not
+**Service effective dates and calendar exceptions: built** (issue #132). The
+feed-currency model this phase deferred is now explicit rather than implicit:
+a headway is measured for one stated `--as-of` date over the services the
+feed's own calendar files put on that date, and the four states in which no
+date can be resolved report `unknown` instead of a number. It needed no
+routing dependency, only the admission that the previous answer — the busiest
+service_id in the file, whatever day it ran — was a measurement of nothing in
+particular.
+
+**Remaining in this class, not built:** two of the corrections risk 5 names.
+Multi-operator feed completeness and walking-network confirmation. Each needs
+a routing dependency or a second dataset that this phase deliberately did not
 introduce.
 
 ### Phase 2: make the gate's scope equal its wording
