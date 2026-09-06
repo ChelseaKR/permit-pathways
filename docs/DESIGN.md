@@ -868,6 +868,26 @@ that root rather than retained from the installed checkout. The aggregate
 record, validator, tests, and any future filled execution record are outside
 export profiles v1 and v2 and require a separately reviewed profile version.
 
+`beta_gate_cli.py recompute` re-derives the digests that ordinary maintenance
+moves, and is the only command that writes. Two routine acts — refreshing a
+public source snapshot, and adopting a source-watch receipt — change bytes
+this record pins, and hand-editing the resulting chain has already failed
+once: binding digests were rewritten without recomputing the dependent
+`artifact_set_fingerprint`, and the record failed its own self-consistency
+check. `recompute` therefore takes every derived value back from
+`load_beta_gate` itself, which is the authority on all of them, rather than
+deriving any of them independently.
+
+It cannot make the gate say anything more favourable. Schema v1's fixed
+aggregate — `not_run`, zero prepared gates, every stronger-claim boolean false
+— is what the validator recomputes, so a re-pin reproduces it. Export profile
+membership is only ever updated in place. Two things are deliberately outside
+it: the immutable not-run planning ledgers are refused rather than re-pinned,
+and `_EXPORT_PROFILE_V2_SHA256` is reported rather than edited, so moving the
+anchor over the export profile stays a person's attestation. Exit 0 means
+nothing moved or the write completed; 1 means there is a change to apply or a
+constant to re-pin; 2 means the request was refused, with the tree unchanged.
+
 ### 8. Public/synthetic evidence handoff (implemented tooling)
 
 `src/permit_pathways/evidence_export.py` packages the exact files named in a

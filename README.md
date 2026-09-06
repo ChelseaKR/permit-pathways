@@ -178,6 +178,8 @@ PYTHONPATH=src python3 -m permit_pathways.source_release_cli validate-templates
 PYTHONPATH=src python3 -m permit_pathways.deployment_smoke # live static-route/artifact smoke check
 PYTHONPATH=src python3 -m permit_pathways.beta_operations  # validates PREPARED / NOT APPROVED only
 PYTHONPATH=src python3 -m permit_pathways.beta_gate_cli validate # recomputes PREPARED / TESTED BETA NOT RUN
+PYTHONPATH=src python3 -m permit_pathways.beta_gate_cli recompute \
+  --write                                       # re-derives the digests a source refresh moves
 PYTHONPATH=src python3 -m permit_pathways.evidence_export_cli build \
   --output /tmp/permit-bearings-evidence.zip \
   --freeze-id public-synthetic-evidence-2026-08-09 \
@@ -922,10 +924,14 @@ explanation sidecar and keeps a separate `/trust` route.
 - `src/permit_pathways/beta_operations.py`: strict validator/CLI for the
   pilot-neutral `prepared_not_approved` operating ledger; it rejects filled
   deployment, approval, rehearsal, and receipt fields
-- `src/permit_pathways/beta_gate.py` and `beta_gate_cli.py`: read-only,
+- `src/permit_pathways/beta_gate.py` and `beta_gate_cli.py`:
   canonical-path/raw-digest-bound pilot-neutral aggregate that validates one
   immutable repository snapshot, current currency, and 14 conservative beta
-  exit categories while accepting only `prepared` / `not_run`
+  exit categories while accepting only `prepared` / `not_run`. `validate` is
+  read-only; `recompute` re-derives the digests an ordinary source refresh
+  moves, taking every derived value from the validator, refusing the immutable
+  not-run ledgers, and reporting rather than editing the one anchor that lives
+  in Python source
 - `src/permit_pathways/rule_verification.py`: schema-v2
   machine-linked/human-reviewed/jurisdiction-approved claim evaluation for
   rule citations and full-rule records
