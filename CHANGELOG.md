@@ -23,6 +23,19 @@ published a versioned release.
     in this project rather than two. The document is read from the bytes the
     watch already fetched, so the check is not a second, differently-timed
     read of a moving target.
+  - **A verdict is issued only where it is earned**, which over this corpus is
+    the minority of cases. Depending on a source is not quoting it: thirteen
+    of the fifteen rules that depend on the HCD ADU Handbook quote a statute
+    and lean on the Handbook for context, so their text was never in that PDF.
+    And this project's excerpts are curated citations rather than raw
+    quotations — several carry editorial brackets condensing a list — so they
+    do not occur verbatim even now. A rule is therefore given a verdict only
+    when the changed document is the one it quotes *and* its excerpt occurs
+    verbatim in the retained copy first. Everything else is `not_checkable`,
+    carrying which of the two it was. Measured over the committed corpus that
+    is 7 trackable and 37 not, with zero rules reported lost against a
+    document that had not changed; without those two rules it would have been
+    25 false losses on the first real source change.
   - A source that could not be read reports `not_checkable` for every rule
     that cites it, carrying the reason, and may report nothing else. Both the
     Python loader and the browser bundle check refuse a receipt that claims

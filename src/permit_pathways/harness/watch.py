@@ -478,6 +478,18 @@ def _document_suffix(source: SourceRecord) -> str:
     return Path(urlsplit(source.url).path).suffix
 
 
+def _retained_text(source: SourceRecord, repository_root: Path) -> str | None:
+    """The text of the copy the recorded digest was taken from, if readable."""
+
+    if not source.local_copy:
+        return None
+    path = repository_root / source.local_copy
+    if not path.is_file():
+        return None
+    text, _ = text_from_bytes(path.read_bytes(), suffix=path.suffix)
+    return text
+
+
 def check_sources(
     sources_path: Path,
     *,
@@ -485,6 +497,7 @@ def check_sources(
     attempts: int | None = None,
     backoff_seconds: float | None = None,
     rules: Sequence[Rule] | None = None,
+    repository_root: Path | None = None,
 ) -> WatchResult:
     """Classify every watched source as unchanged, changed, or unverifiable.
 
@@ -501,6 +514,13 @@ def check_sources(
 
     sources = load_sources(sources_path, today=resolve_today(today))
     budget = max(1, FETCH_ATTEMPTS if attempts is None else attempts)
+    # `data/sources.json` sits one level under the repository root, and
+    # `local_copy` is recorded relative to that root.
+    root = (
+        repository_root
+        if repository_root is not None
+        else sources_path.resolve().parent.parent
+    )
     result = WatchResult()
     for source_id, source in sources.items():
         if not source.watch:
@@ -526,6 +546,7 @@ def check_sources(
                 # reading that did not happen.
                 result.excerpt_survival[source_id] = survival_for_source(
                     source_id,
+                    source.url,
                     rules,
                     new_text=None,
                     not_checkable_reason=(
@@ -543,8 +564,10 @@ def check_sources(
         text, reason = text_from_bytes(payload, suffix=_document_suffix(source))
         result.excerpt_survival[source_id] = survival_for_source(
             source_id,
+            source.url,
             rules,
             new_text=text,
+            previous_text=_retained_text(source, root),
             not_checkable_reason=reason,
         )
     return result

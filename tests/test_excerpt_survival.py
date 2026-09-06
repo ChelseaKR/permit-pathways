@@ -91,6 +91,11 @@ def _rules(tmp_path: Path, records: list[dict] | None = None) -> Path:
 
 
 def _sources(tmp_path: Path, recorded: str) -> Path:
+    # The retained copy the recorded digest was taken from. It is what makes
+    # `excerpt_lost` mean "this was here and is not any more".
+    copy = tmp_path / "corpus" / "example" / "handout.html"
+    copy.parent.mkdir(parents=True, exist_ok=True)
+    copy.write_text(recorded, encoding="utf-8")
     path = tmp_path / "sources.json"
     path.write_text(
         json.dumps(
@@ -153,7 +158,10 @@ def test_a_footer_edit_moves_the_hash_and_leaves_every_excerpt_standing(
     _serve(monkeypatch, FOOTER_CHANGED.encode("utf-8"))
 
     result = check_sources(
-        sources_path, backoff_seconds=0.0, rules=load_rules(rules_path)
+        sources_path,
+        backoff_seconds=0.0,
+        rules=load_rules(rules_path),
+        repository_root=tmp_path,
     )
 
     # The source really did change: survival is an ordering aid on top of a
@@ -176,7 +184,10 @@ def test_a_section_rewrite_loses_exactly_the_rule_that_quoted_it(tmp_path, monke
     _serve(monkeypatch, SECTION_REWRITTEN.encode("utf-8"))
 
     result = check_sources(
-        sources_path, backoff_seconds=0.0, rules=load_rules(rules_path)
+        sources_path,
+        backoff_seconds=0.0,
+        rules=load_rules(rules_path),
+        repository_root=tmp_path,
     )
 
     assert result.changed == [SOURCE_ID]
@@ -212,7 +223,10 @@ def test_an_unverifiable_source_reports_not_checkable_and_never_lost(
     monkeypatch.setattr("permit_pathways.harness.watch.FETCH_BACKOFF_SECONDS", 0.0)
 
     result = check_sources(
-        sources_path, backoff_seconds=0.0, rules=load_rules(rules_path)
+        sources_path,
+        backoff_seconds=0.0,
+        rules=load_rules(rules_path),
+        repository_root=tmp_path,
     )
 
     assert result.changed == []
@@ -240,7 +254,12 @@ def test_an_unreadable_changed_document_is_not_checkable_with_a_reason(tmp_path)
     assert reason is not None
 
     survival = survival_for_source(
-        SOURCE_ID, rules, new_text=text, not_checkable_reason=reason
+        SOURCE_ID,
+        SOURCE_URL,
+        rules,
+        new_text=text,
+        previous_text=BEFORE,
+        not_checkable_reason=reason,
     )
 
     assert _statuses(survival) == {
@@ -271,7 +290,9 @@ def test_a_rule_that_quotes_nothing_is_not_checkable_rather_than_lost():
         display_group="route",
     )
 
-    survival = survival_for_source(SOURCE_ID, [rule], new_text=FOOTER_CHANGED)
+    survival = survival_for_source(
+        SOURCE_ID, SOURCE_URL, [rule], new_text=FOOTER_CHANGED, previous_text=BEFORE
+    )
 
     assert _statuses(survival) == {"quoteless-rule": "not_checkable"}
     assert survival[0].reason is not None
@@ -282,7 +303,9 @@ def test_survival_is_reported_only_for_rules_that_depend_on_the_source(tmp_path)
     other["source_dependencies"] = ["some-other-source"]
     rules = load_rules(_rules(tmp_path, [_rule("height-rule", HEIGHT_EXCERPT), other]))
 
-    survival = survival_for_source(SOURCE_ID, rules, new_text=FOOTER_CHANGED)
+    survival = survival_for_source(
+        SOURCE_ID, SOURCE_URL, rules, new_text=FOOTER_CHANGED, previous_text=BEFORE
+    )
 
     assert [item.rule_id for item in survival] == ["height-rule"]
 
@@ -511,7 +534,10 @@ def test_the_builder_records_the_survival_the_watch_computed(tmp_path, monkeypat
     _serve(monkeypatch, SECTION_REWRITTEN.encode("utf-8"))
 
     watch = check_sources(
-        sources_path, backoff_seconds=0.0, rules=load_rules(rules_path)
+        sources_path,
+        backoff_seconds=0.0,
+        rules=load_rules(rules_path),
+        repository_root=tmp_path,
     )
     snapshot = build_source_state_snapshot(
         watch,
@@ -535,3 +561,91 @@ def test_the_builder_records_the_survival_the_watch_computed(tmp_path, monkeypat
     path = tmp_path / "written.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     load_source_state_snapshot(path, sources_path, rules_path, golden_path)
+
+
+# --------------------------------------------------------------------------
+# The committed corpus. Both of these caught a real bug in this feature.
+# --------------------------------------------------------------------------
+
+
+def _committed_survival():
+    """Every watched source held against its own retained copy, unchanged."""
+
+    from permit_pathways.harness.watch import load_sources
+
+    rules = load_rules(RULES)
+    results = {}
+    for source_id, source in sorted(load_sources(SOURCES).items()):
+        if not source.watch or not source.local_copy:
+            continue
+        copy = ROOT / source.local_copy
+        if not copy.is_file():
+            continue
+        text, reason = text_from_bytes(copy.read_bytes(), suffix=copy.suffix)
+        results[source_id] = survival_for_source(
+            source_id,
+            source.url,
+            rules,
+            new_text=text,
+            previous_text=text,
+            not_checkable_reason=reason,
+        )
+    return results
+
+
+def test_no_committed_rule_is_reported_lost_against_an_unchanged_document():
+    """The baseline invariant: a document that did not change loses nothing.
+
+    This is the test that caught the feature's two real defects.
+
+    1. Holding a rule's excerpt against a source it merely *depends on*
+       reported thirteen HCD Handbook dependants as having lost text that was
+       never in that PDF — they quote statutes.
+    2. This project's excerpts are curated citations, not raw quotations:
+       several carry editorial brackets condensing a list, so they do not
+       occur verbatim even now. Twelve rules reported `excerpt_lost` against
+       their own unchanged retained copy.
+
+    Either would have made the first real source change produce a page of
+    findings nobody could act on, which is worse than no signal at all.
+    """
+
+    lost = {
+        source_id: [item.rule_id for item in survival if item.status == "excerpt_lost"]
+        for source_id, survival in _committed_survival().items()
+    }
+    assert {k: v for k, v in lost.items() if v} == {}
+
+
+def test_the_committed_corpus_can_actually_track_something():
+    """A check that can never fire is not a check.
+
+    The complement of the invariant above: `not_checkable` everywhere would
+    also pass it, so this pins that real excerpts really are tracked.
+    """
+
+    survives = sum(
+        1
+        for survival in _committed_survival().values()
+        for item in survival
+        if item.status == "excerpt_survives"
+    )
+    assert survives >= 7
+
+
+def test_depending_on_a_source_is_not_quoting_it():
+    """The HCD Handbook is the case that makes the distinction load-bearing."""
+
+    survival = _committed_survival()["hcd-adu-handbook-2026-03"]
+    by_status = {}
+    for item in survival:
+        by_status.setdefault(item.status, []).append(item.rule_id)
+
+    # Exactly the two rules whose own citation URL is the Handbook.
+    assert sorted(by_status.get("excerpt_survives", [])) == [
+        "sb9-adu-interaction",
+        "sb9-lot-split-adu-interaction",
+    ]
+    # The other thirteen depend on it and quote a statute instead.
+    assert len(by_status.get("not_checkable", [])) == 13
+    assert "excerpt_lost" not in by_status
