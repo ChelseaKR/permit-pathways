@@ -7,6 +7,28 @@ published a versioned release.
 
 ### Fixed
 
+- Two date validators compared against the host machine's local calendar
+  instead of UTC, so the same bytes passed or failed depending on where and
+  when they were checked. `jurisdictions._required_recorded_date` (the
+  `retrieved_on` guard on the HCD letter dataset, which is emitted straight
+  into the browser bundle) and `conformance_evaluation.load_answer_key` (the
+  `law_as_of` / `check_registry_as_of` future-date guard) both called
+  `date.today()`. West of UTC that rejects a dataset stamped with the current
+  UTC date — a `build_hcd_letters.py <today>` run during a Pacific evening
+  fails `retrieved_on: cannot be in the future` locally while the identical
+  file passes in CI. East of UTC it does the opposite and accepts a record
+  dated a day into the future, which is precisely what the guard exists to
+  stop. `assets/demo.js` has always compared these fields against `Date.UTC`,
+  and `permit_pathways.dates.resolve_today` exists so the Python runtimes
+  agree with it; these two callers had simply never been moved onto it.
+  `build_coverage_index` now takes the same injectable `today` every other
+  validator here does, and a test asserts no module under `src/` or
+  `scripts/` reintroduces `date.today()`.
+  - `scripts/readability_gate.py` stamped a regenerated baseline's
+    `generated_on` from the local clock for the same reason; it now records
+    the UTC date, so a committed baseline says the same thing wherever it was
+    regenerated.
+
 - The Bedrock provider default is a model this project's AWS account can
   actually invoke. `DEFAULT_BEDROCK_MODEL` was
   `global.anthropic.claude-sonnet-5`, and `InvokeModel` answers

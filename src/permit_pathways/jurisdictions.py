@@ -18,6 +18,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from .dates import resolve_today
+
 COVERAGE_INDEX_SCHEMA_VERSION = 1
 
 
@@ -63,12 +65,17 @@ def _required_text(value: Any, field: str) -> str:
     return value.strip()
 
 
-def _required_recorded_date(value: Any, field: str) -> str:
+def _required_recorded_date(value: Any, field: str, *, today: date) -> str:
     """Return one canonical, non-future ISO calendar date.
 
     The coverage index is emitted directly into the static browser bundle.
     Validate this datum at build time as well as in the browser so a malformed
     HCD dataset cannot turn into a runtime-only failure.
+
+    ``today`` is a UTC calendar date, never the host machine's local one:
+    ``assets/demo.js`` compares the same field against ``Date.UTC``, and a
+    local-clock comparison here made the two runtimes disagree for the hours
+    either side of midnight in the host timezone.
     """
 
     recorded_on = _required_text(value, field)
@@ -78,7 +85,7 @@ def _required_recorded_date(value: Any, field: str) -> str:
         raise ValueError(f"{field}: expected an ISO calendar date") from error
     if parsed.isoformat() != recorded_on:
         raise ValueError(f"{field}: expected an ISO calendar date")
-    if parsed > date.today():
+    if parsed > today:
         raise ValueError(f"{field}: cannot be in the future")
     return recorded_on
 
@@ -186,6 +193,8 @@ def build_coverage_index(
     registry_path: Path,
     rules_dir: Path,
     letters_path: Path,
+    *,
+    today: date | None = None,
 ) -> dict[str, Any]:
     """Build a compact statewide coverage inventory from canonical records.
 
@@ -211,7 +220,9 @@ def build_coverage_index(
         )
 
     retrieved_on = _required_recorded_date(
-        letter_data.get("retrieved_on"), f"{letters_path}.retrieved_on"
+        letter_data.get("retrieved_on"),
+        f"{letters_path}.retrieved_on",
+        today=resolve_today(today),
     )
     source = _required_text(letter_data.get("source"), f"{letters_path}.source")
     letter_count = letter_data.get("letter_count")
