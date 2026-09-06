@@ -31,7 +31,7 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
+import subprocess  # nosec B404
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -190,7 +190,10 @@ def _ssh_keygen() -> str:
 
 
 def _run(argv: list[str], payload: bytes) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(  # noqa: S603 - argv is built here, never from input
+    # The argv is built entirely in this module from a fixed program path and
+    # values this process controls; no shell is used and nothing from the
+    # archive or the sidecar reaches the command line.
+    return subprocess.run(  # noqa: S603  # nosec B603
         argv,
         input=payload,
         capture_output=True,
